@@ -1,0 +1,12 @@
+appname               = terminal
+version               = 1.2.4
+display_name          = 终端
+desc                  = 网页终端，支持账号密码登录，在浏览器中直接执行 Shell 命令；进程随页面开关，关闭网页即回收
+platform              = arm
+source                = thirdparty
+maintainer            = terminal
+distributor           = terminal
+desktop_uidir         = ui
+desktop_applaunchname = terminal.Application
+ctl_stop              = true
+checkport             = false

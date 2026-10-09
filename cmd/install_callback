@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# 安装完成后：
+#   1) 确保 CGI 可执行（fnpack 打包会把执行位抹成 0666，必须在此补回）
+#   2) 按目标架构挑选 PTY 二进制，改名成约定的 terminal-pty
+#   3) 准备可写的会话目录
+#   4) 启动应用（ctl_stop = true，飞牛期望安装后应用处于运行态）
+
+APP_DIR="/var/apps/terminal/target"
+[ -n "${TRIM_APPDEST}" ] && APP_DIR="${TRIM_APPDEST}"
+
+VAR_DIR="/var/apps/terminal/var"
+[ -n "${TRIM_PKGVAR}" ] && VAR_DIR="${TRIM_PKGVAR}"
+
+# ---- 1) 恢复执行位 ----
+# fnpack 把包内文件模式统一写成 0666，所有执行位都要在这里补回来。
+# 逐个文件 chmod（不用裸 glob，避免 shell 展开失败时静默忽略）。
+chmod_exec_all() {
+    local f
+    for f in "${APP_DIR}/ui/"*.cgi "${APP_DIR}/cmd/"* "${APP_DIR}/bin/"*; do
+        [ -f "${f}" ] && chmod +x "${f}" 2>/dev/null
+    done
+}
+chmod_exec_all
+
+# ---- 2) 挑选与本机架构匹配的二进制 ----
+# 包内按 terminal-pty-linux-<arch> 存放；此处选出唯一一份并落成 terminal-pty
+pick_pty_bin() {
+    local bindir="${APP_DIR}/bin" arch chosen
+    [ -d "${bindir}" ] || return 0
+
+    arch="$(uname -m 2>/dev/null)"
+    case "${arch}" in
+        aarch64|arm64)  chosen="${bindir}/terminal-pty-linux-arm64" ;;
+        armv7l|armv7|armhf) chosen="${bindir}/terminal-pty-linux-arm" ;;
+        x86_64|amd64)   chosen="${bindir}/terminal-pty-linux-amd64" ;;
+        *)              chosen="" ;;
+    esac
+
+    # 目标架构缺失时，退而求其次按文件名任一可用版本
+    if [ ! -f "${chosen}" ]; then
+        for c in "${bindir}"/terminal-pty-linux-*; do
+            [ -f "${c}" ] && chosen="${c}" && break
+        done
+    fi
+    [ -f "${chosen}" ] || return 0
+
+    cp -f "${chosen}" "${bindir}/terminal-pty" 2>/dev/null
+
+    # 补执行位：拷贝出来的通用名 + 全部备份
+    chmod +x "${bindir}/terminal-pty" 2>/dev/null
+    for c in "${bindir}"/terminal-pty-linux-*; do
+        [ -f "${c}" ] && chmod +x "${c}" 2>/dev/null
+    done
+}
+
+pick_pty_bin
+
+# ---- 3) 会话目录 ----
+chmod 700 "${VAR_DIR}" 2>/dev/null
+mkdir -p "${VAR_DIR}/sessions" 2>/dev/null
+chmod 700 "${VAR_DIR}/sessions" 2>/dev/null
+
+# ---- 4) 启动 ----
+if [ -x "${APP_DIR}/cmd/main" ]; then
+    "${APP_DIR}/cmd/main" start >/dev/null 2>&1
+fi
+
+exit 0

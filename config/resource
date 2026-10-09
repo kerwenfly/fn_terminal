@@ -1,0 +1,12 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "terminal"
+      },
+      {
+        "name": "terminal/data"
+      }
+    ]
+  }
+}

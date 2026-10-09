@@ -1,0 +1,153 @@
+#!/bin/sh
+
+# ====== 终端应用生命周期管理 ======
+#
+# 终端没有常驻守护进程：shell（terminal-pty + bash/login）由 terminal.cgi
+# 按需创建，并且**生命周期绑定到网页**：
+#
+#   网页打开   -> 建会话，之后每 5 秒续租心跳
+#   网页关闭   -> 前端发 shutdown 立即回收；发不出去则由 sess_gc 在
+#                 30 秒心跳超时后回收
+#   应用停用   -> stop 杀掉所有会话（含孤儿）
+#
+# 飞牛要求 ctl_stop = true 的应用提供 start / stop / status，
+# 否则不会注册桌面入口。因此这里把「会话集合」当作应用的可管理状态：
+#
+#   start   清理上次的残留会话（含孤儿），准备 sessions 目录
+#   stop    销毁所有会话（杀掉 shell），释放资源
+#   status  只要运行环境就绪就返回 0（视为运行中）
+#
+# 注意：status 返回 0 是刻意的——会话按需启动，若返回非 0
+# 飞牛会把应用标记为「已停用」，桌面入口变灰。
+
+APP_NAME="terminal"
+APP_DIR="/var/apps/${APP_NAME}/target"
+
+if [ -n "${TRIM_APPDEST}" ]; then
+    APP_DIR="${TRIM_APPDEST}"
+fi
+
+VAR_DIR="/var/apps/${APP_NAME}/var"
+if [ -n "${TRIM_PKGVAR}" ]; then
+    VAR_DIR="${TRIM_PKGVAR}"
+fi
+
+SESS_DIR="${VAR_DIR}/sessions"
+LOG_FILE="${VAR_DIR}/info.log"
+ORPHAN_SECS=30
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}" 2>/dev/null
+}
+
+# 销毁目录下所有会话（按 pid 文件杀进程组）
+kill_all_sessions() {
+    [ -d "${SESS_DIR}" ] || return 0
+    for f in "${SESS_DIR}"/*/pid; do
+        [ -f "${f}" ] || continue
+        pid="$(tr -d '[:space:]' < "${f}" 2>/dev/null)"
+        [ -n "${pid}" ] || continue
+        kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
+    done
+    sleep 1
+    for f in "${SESS_DIR}"/*/pid; do
+        [ -f "${f}" ] || continue
+        pid="$(tr -d '[:space:]' < "${f}" 2>/dev/null)"
+        [ -n "${pid}" ] || continue
+        kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
+    done
+    rm -rf "${SESS_DIR}" 2>/dev/null
+}
+
+start_process() {
+    mkdir -p "${SESS_DIR}" 2>/dev/null
+    chmod 700 "${VAR_DIR}" "${SESS_DIR}" 2>/dev/null
+
+    # 清理上次运行遗留的会话：
+    #   a) 进程已死的残留目录
+    #   b) 进程还活着但**心跳已过期**的孤儿会话
+    #
+    # 应用启动这一刻，页面必然还没打开（用户要点了图标才开网页），
+    # 所以此刻存在的任何存活会话都必然是上一次运行的遗留 —— 一律收掉，
+    # 保证「程序打开才启动二进制」这条规则从启动那一刻就成立。
+    now="$(date +%s 2>/dev/null || echo 0)"
+    for d in "${SESS_DIR}"/*; do
+        [ -d "${d}" ] || continue
+        pid=""
+        [ -f "${d}/pid" ] && pid="$(tr -d '[:space:]' < "${d}/pid" 2>/dev/null)"
+
+        if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+            rm -rf "${d}" 2>/dev/null
+            continue
+        fi
+
+        # 进程还活着 —— 只看心跳有没有过期，不过期就保留
+        # （理论上不存在：应用刚启动，不该有活跃页面）
+        mtime=0
+        for f in "${d}/beat" "${d}/out.log"; do
+            [ -f "${f}" ] || continue
+            mtime="$(stat -c %Y "${f}" 2>/dev/null || stat -f %m "${f}" 2>/dev/null || echo 0)"
+            [ -n "${mtime}" ] && [ "${mtime}" != "0" ] && break
+        done
+        [ -z "${mtime}" ] && mtime=0
+
+        if [ "${mtime}" = "0" ] || [ $((now - mtime)) -gt "${ORPHAN_SECS}" ]; then
+            kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
+            sleep 0.2
+            kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
+            rm -rf "${d}" 2>/dev/null
+        fi
+    done
+
+    # 确保 CGI 与 PTY 组件可执行（fnpack 打包后模式是 0666，执行位会丢）
+    # 注意：*.cgi 展开失败时 glob 会原样保留，加 [ -f ] 逐个判断更稳
+    for f in "${APP_DIR}/ui/"*.cgi; do
+        [ -f "${f}" ] && chmod +x "${f}" 2>/dev/null
+    done
+    for f in "${APP_DIR}/bin/"*; do
+        [ -f "${f}" ] && chmod +x "${f}" 2>/dev/null
+    done
+    chmod +x "${APP_DIR}/cmd/"* 2>/dev/null
+
+    # PTY 组件缺失时补挑一次（升级 / 手工拷贝场景）
+    if [ ! -x "${APP_DIR}/bin/terminal-pty" ] && [ -d "${APP_DIR}/bin" ]; then
+        arch="$(uname -m 2>/dev/null)"
+        case "${arch}" in
+            aarch64|arm64)  cand="${APP_DIR}/bin/terminal-pty-linux-arm64" ;;
+            armv7l|armv7|armhf) cand="${APP_DIR}/bin/terminal-pty-linux-arm" ;;
+            x86_64|amd64)   cand="${APP_DIR}/bin/terminal-pty-linux-amd64" ;;
+            *)              cand="" ;;
+        esac
+        if [ -n "${cand}" ] && [ -f "${cand}" ]; then
+            cp -f "${cand}" "${APP_DIR}/bin/terminal-pty" 2>/dev/null
+            chmod +x "${APP_DIR}/bin/terminal-pty" 2>/dev/null
+        fi
+    fi
+
+    log_msg "Started (session dir ready: ${SESS_DIR})"
+    exit 0
+}
+
+stop_process() {
+    log_msg "Stopping: killing all sessions"
+    kill_all_sessions
+    log_msg "Stopped"
+    exit 0
+}
+
+# ====== 主入口 ======
+case "$1" in
+    start)
+        start_process
+        ;;
+    stop)
+        stop_process
+        ;;
+    status)
+        # 运行环境就绪即视为运行中（会话按需创建）
+        exit 0
+        ;;
+    *)
+        exit 1
+        ;;
+esac

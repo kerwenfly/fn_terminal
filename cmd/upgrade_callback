@@ -1,0 +1,10 @@
+#!/bin/bash
+
+### This script is called after the user upgrades the application.
+
+# 升级会替换 target 目录，重新赋执行权限
+if [ -n "${TRIM_APPDEST}" ]; then
+    chmod +x "${TRIM_APPDEST}/ui/"*.cgi 2>/dev/null
+fi
+
+exit 0

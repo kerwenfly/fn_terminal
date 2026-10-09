@@ -1,0 +1,265 @@
+/* ==========================================================================
+   终端应用样式 —— 仿真实终端（深色、等宽、无圆角、网格底）
+   ========================================================================== */
+
+:root {
+  --bg:        #0b0f14;   /* 终端最底色 */
+  --bg-term:   #0d1117;   /* 终端区背景 */
+  --titlebar:  #161b22;   /* 标题栏 */
+  --border:    #21262d;
+  --fg:        #c9d1d9;
+  --fg-dim:    #6e7681;
+  --accent:    #2f81f7;
+  --green:     #3fb950;
+  --red:       #f85149;
+  --yellow:    #d29922;
+  --mono: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", "Menlo",
+          "Consolas", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ---------- 标题栏 ---------- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--titlebar);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+.title {
+  font-size: 12px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#titleHost { color: var(--fg); }
+
+.actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rename {
+  width: 110px;
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+.rename:focus { border-color: var(--accent); }
+
+.sel {
+  height: 26px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+.sel:focus { border-color: var(--accent); }
+.sel option { background: #161b22; color: var(--fg); }
+
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  background: #21262d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.btn:hover { background: #30363d; border-color: #484f58; }
+.btn:active { transform: translateY(1px); }
+.btn.danger:hover { background: #4d1f1f; border-color: var(--red); color: #ffb4ae; }
+
+/* ---------- 标签 ---------- */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: #0d1117;
+  border-top: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.tab:hover { color: var(--fg); }
+.tab.active {
+  color: var(--fg);
+  background: var(--bg-term);
+  border-top-color: var(--accent);
+}
+.tab .tab-name { overflow: hidden; text-overflow: ellipsis; }
+.tab .tab-x {
+  font-size: 13px;
+  line-height: 1;
+  opacity: .5;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.tab .tab-x:hover { opacity: 1; background: #30363d; color: var(--red); }
+.tab.dead .tab-name { text-decoration: line-through; opacity: .5; }
+
+/* ---------- 终端主体 ---------- */
+.term-wrap {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-term);
+  position: relative;
+}
+.screen {
+  position: absolute;
+  inset: 0;
+  outline: none;
+  padding: 6px 4px 4px 8px;
+  overflow: hidden;
+}
+.xterm-host { width: 100%; height: 100%; }
+
+/* 网格波纹底（终端质感） */
+.term-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+  background-size: 24px 24px;
+  z-index: 0;
+}
+.xterm-host, .fallback { position: relative; z-index: 1; }
+
+/* ---------- 启动遮罩 ---------- */
+.boot {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13,17,23,.92);
+  backdrop-filter: blur(2px);
+}
+.boot.hidden { display: none; }
+.boot-inner { text-align: center; }
+.spinner {
+  width: 30px; height: 30px;
+  margin: 0 auto 14px;
+  border: 2px solid #21262d;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.boot-text { font-size: 12px; color: var(--fg-dim); }
+
+/* ---------- 降级终端 ---------- */
+.fallback {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.fb-out {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg);
+  padding-bottom: 4px;
+}
+.fb-line { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.fb-ps1 { color: var(--green); flex-shrink: 0; }
+.fb-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  caret-color: var(--fg);
+}
+
+/* ---------- 状态栏 ---------- */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 26px;
+  padding: 0 12px;
+  background: var(--titlebar);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.statusbar .st { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.statusbar b { color: var(--fg); font-weight: 500; }
+.statusbar .spacer { flex: 1; }
+.st-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--yellow); display: block;
+}
+.st-dot.on  { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,.7); }
+.st-dot.off { background: var(--red); }
+.statusbar .hint { color: #4d5561; }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 720px) {
+  .statusbar .hint { display: none; }
+  .rename { width: 74px; }
+  .title { display: none; }
+}

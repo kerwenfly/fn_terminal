@@ -1,0 +1,16 @@
+#!/bin/bash
+
+### This script is called before the user uninstalls the application.
+
+# 清理残留会话进程，避免卸载后 shell 成为孤儿
+VARDIR="${TRIM_PKGVAR:-/var/apps/terminal/var}"
+if [ -d "${VARDIR}/sessions" ]; then
+    for f in "${VARDIR}/sessions/"*.pid; do
+        [ -f "$f" ] || continue
+        pid="$(tr -d '[:space:]' < "$f" 2>/dev/null)"
+        [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null
+    done
+    rm -rf "${VARDIR}/sessions" 2>/dev/null
+fi
+
+exit 0

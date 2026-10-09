@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>终端</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="terminal.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- 标题栏（仿终端窗口 chrome） -->
+  <header class="titlebar">
+    <div class="title">终端 &mdash; <span id="titleHost">localhost</span></div>
+    <div class="actions">
+      <input id="sessionName" class="rename" type="text" value="shell" spellcheck="false" autocomplete="off" title="会话名" />
+      <select id="authMode" class="sel" title="登录方式">
+        <option value="login">账号登录</option>
+        <option value="shell">直接进入 Shell</option>
+      </select>
+      <button id="btnNew" class="btn" title="新建会话">＋ 新建</button>
+      <button id="btnClear" class="btn" title="清屏 (Ctrl+L)">清屏</button>
+      <button id="btnClose" class="btn danger" title="关闭会话">关闭</button>
+    </div>
+  </header>
+
+  <!-- 会话标签 -->
+  <div id="tabs" class="tabs"></div>
+
+  <!-- 终端主体 -->
+  <main class="term-wrap">
+    <div id="screen" class="screen" tabindex="0">
+      <!-- xterm.js 渲染容器 -->
+      <div id="xterm" class="xterm-host"></div>
+
+      <!-- 启动遮罩 -->
+      <div id="boot" class="boot">
+        <div class="boot-inner">
+          <div class="spinner"></div>
+          <div class="boot-text" id="bootText">正在建立会话…</div>
+        </div>
+      </div>
+
+      <!-- xterm.js 加载失败时的降级终端 -->
+      <div id="fallback" class="fallback" style="display:none">
+        <div id="fbOut" class="fb-out"></div>
+        <div class="fb-line">
+          <span id="fbPs1" class="fb-ps1">$</span>
+          <input id="fbInput" class="fb-input" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" />
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 状态栏 -->
+  <footer class="statusbar">
+    <span class="st"><i id="stDot" class="st-dot"></i><span id="stConn">连接中</span></span>
+    <span class="st">身份 <b id="stUser">-</b></span>
+    <span class="st">目录 <b id="stCwd">~</b></span>
+    <span class="st">退出码 <b id="stRc">0</b></span>
+    <span class="st">会话 <b id="stSid">-</b></span>
+    <span class="spacer"></span>
+    <span class="st hint">Tab 补全 · Ctrl+C 中断 · ↑↓ 历史 · PgUp/PgDn 滚动</span>
+    <span class="st" id="stMode">xterm</span>
+  </footer>
+
+</div>
+
+<!-- xterm.js 本地依赖（离线内置，不依赖公网） -->
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
