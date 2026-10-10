@@ -1,10 +1,11 @@
 // 终端会话 PTY 包装器（Go 静态二进制，零运行时依赖）
 //
 // 职责：把一个 shell / login 进程挂在一个真正的伪终端（PTY）上，
-//       并在 PTY 与两个普通文件之间双向搬运数据：
+//       并在 PTY 与若干个普通文件之间搬运数据：
 //
 //	PTY 输出   ──►  out.log（追加写，前端只读增量）
 //	in.pipe    ──►  PTY 输入（FIFO，CGI 每次请求往里写按键流）
+//	ctl.pipe   ──►  控制通道（FIFO，只传窗口尺寸与回显开关，见 pumpCtl）
 //
 // 这样既拿到了真实 TTY（颜色、行编辑、Tab 补全、Ctrl-C 都正常），
 // 又完全避开 WebSocket —— fnOS 的 CGI 是一次性进程，后端用「轮询读日志」
@@ -24,10 +25,13 @@
 // 环境变量（可选）:
 //
 //	PTY_COLS / PTY_ROWS   初始窗口尺寸，默认 80x24
-//	PTY_LOG_MAX           日志硬上限字节数，默认 8MB（超出做尾部保留）
+//
+// 注意：日志长度上限不在本进程做 —— out.log 超限时的「尾部保留」由
+// session.inc 的 sess_read（LOG_MAX_BYTES）统一处理，两端只按字节 offset 对齐。
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +40,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -48,13 +53,29 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	// TIOCSCTTY：把当前 fd 设为控制终端
-	tiocsctty = 0x540E
 	// TIOCSWINSZ：设置窗口尺寸
 	tiocswinsz = 0x5414
 	// TIOCGWINSZ：读取窗口尺寸
 	tiocgwinsz = 0x5413
+	// TCGETS / TCSETS：读写 termios（asm-generic 取值，x86_64 / arm64 相同）
+	tcgets = 0x5401
+	tcsets = 0x5402
 )
+
+// ECHO 位（lflag）。c_lflag 里还有 ICANON / ISIG / IEXTEN 等，
+// 这里只关心回显这一位。
+const termiosEcho = 0x00000008
+
+// termios 对应内核 struct termios（注意：是**内核**那份，不含 libc 追加的
+// c_ispeed / c_ospeed，所以 NCCS = 19、总长 36 字节）。
+type termios struct {
+	Iflag uint32
+	Oflag uint32
+	Cflag uint32
+	Lflag uint32
+	Line  uint8
+	Cc    [19]uint8
+}
 
 // winsize 对应内核 struct winsize
 type winsize struct {
@@ -62,6 +83,46 @@ type winsize struct {
 	Col    uint16
 	Xpixel uint16
 	Ypixel uint16
+}
+
+func ioctlGetTermios(fd int, t *termios) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(tcgets), uintptr(unsafe.Pointer(t)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func ioctlSetTermios(fd int, t *termios) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(tcsets), uintptr(unsafe.Pointer(t)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// setEcho 开关 PTY 从端的 ECHO 位。
+//
+// 为什么必须由本进程动手（而不是让前端去 `stty -echo`）：
+// 往 in.pipe 里塞 stty 命令会被回显成「用户没敲过的命令」并进 shell 历史 ——
+// 这正是 v1.2.6 之前踩过的坑。这里直接对从端 fd 做 tcsetattr，
+// 屏幕、历史都干净。
+func setEcho(fd int, on bool) error {
+	var t termios
+	if err := ioctlGetTermios(fd, &t); err != nil {
+		return err
+	}
+	if (t.Lflag&termiosEcho != 0) == on {
+		return nil
+	}
+	if on {
+		t.Lflag |= termiosEcho
+	} else {
+		t.Lflag &^= termiosEcho
+	}
+	return ioctlSetTermios(fd, &t)
 }
 
 func ioctlSetWinsize(fd int, ws *winsize) error {
@@ -73,14 +134,8 @@ func ioctlSetWinsize(fd int, ws *winsize) error {
 	return nil
 }
 
-func ioctlSetCtty(fd int) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd),
-		uintptr(tiocsctty), 0)
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
+// 控制终端的设置由 exec.Cmd 的 SysProcAttr.Setctty 完成（见 main），
+// 不需要手动 ioctl(TIOCSCTTY)。
 
 // ---------------------------------------------------------------------------
 // 打开 PTY 主/从对
@@ -206,12 +261,42 @@ func main() {
 	}
 	defer pipeFile.Close()
 
+	// 控制通道：只用来接收窗口尺寸变更（CGI 无法直接 ioctl 本进程持有的 master）。
+	// 拿不到时降级为「不支持运行时改尺寸」，不影响终端本身可用。
+	ctlPath := filepath.Join(sessDir, "ctl.pipe")
+	ctlFile, ctlErr := openFifoNonblock(ctlPath)
+	if ctlErr != nil {
+		fmt.Fprintf(os.Stderr, "terminal-pty: 打开 ctl.pipe 失败（忽略）: %v\n", ctlErr)
+		ctlFile = nil
+	}
+	if ctlFile != nil {
+		defer ctlFile.Close()
+	}
+
 	master, slave, err := openPty()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "terminal-pty: 创建 PTY 失败: %v\n", err)
 		os.Exit(1)
 	}
 	_ = ioctlSetWinsize(int(slave.Fd()), &winsize{Row: uint16(rows), Col: uint16(cols)})
+
+	// -----------------------------------------------------------------
+	// 关掉 tty 回显 —— 交互式前端「本地回显」的前提
+	//
+	// 前端要在按键那一刻就把字符画出来，而 shell（readline）本来也会把同样的
+	// 字符回送一遍，两边都画就是 lsls。让 readline 别回显比在前端逐字节剥掉
+	// 它的回显可靠得多：
+	//   · readline 在 rl_prep_terminal 里把当时的 ECHO 位记进 _rl_echoing_p，
+	//     为 0 时它整条回显路径都不输出（实测：打字 / 退格 / 方向键全静默）；
+	//   · 于是「输入行的显示」完全归前端所有，不存在两条通道打架的可能。
+	//
+	// 全屏程序（vi / less / top）自己管 termios 并自绘输入，不受影响（已实测）。
+	// 唯一会重新打开 ECHO 的是 login / su 这类登录程序，前端在识别到提示符后
+	// 会通过 ctl 通道把这一位再压回去。
+	// -----------------------------------------------------------------
+	if err := setEcho(int(slave.Fd()), false); err != nil {
+		fmt.Fprintf(os.Stderr, "terminal-pty: 关闭 tty 回显失败（忽略）: %v\n", err)
+	}
 
 	// -----------------------------------------------------------------
 	// 启动子进程：setsid → 从端设为控制终端 → dup 到 0/1/2 → exec
@@ -235,10 +320,11 @@ func main() {
 		master.Close()
 		os.Exit(1)
 	}
-	// 父进程写完 pid 后即可关闭从端（子进程自己持有）
+	// 注意：这里**不**关从端。子进程自己有 dup 出去的 0/1/2，父进程再留一份
+	// 是为了后面还能对同一个 tty 做 tcsetattr（ctl 通道的 echo 开关要用）。
+	// 子进程退出后本进程紧接着就结束，不会因此多留什么。
 	pidPath := filepath.Join(sessDir, "pid")
 	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600)
-	slave.Close()
 
 	// CGI 进程退出时不要把会话带走（否则刷新页面就等于杀终端）
 	signal.Ignore(syscall.SIGHUP)
@@ -267,14 +353,27 @@ func main() {
 		pumpPipeToPty(pipeFile, master, &done)
 	}()
 
+	// ctl.pipe → 窗口尺寸 / 回显开关
+	if ctlFile != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pumpCtl(ctlFile, master, slave, &done)
+		}()
+	}
+
 	// 等子进程结束
 	waitErr := cmd.Wait()
 	_ = waitErr
 
-	// 子进程没了：置位 done 并关闭描述符，让两个 goroutine 退出
+	// 子进程没了：置位 done 并关闭描述符，让各个 goroutine 退出
 	atomic.StoreInt32(&done, 1)
 	_ = master.Close()
+	_ = slave.Close()
 	_ = pipeFile.Close()
+	if ctlFile != nil {
+		_ = ctlFile.Close()
+	}
 	wg.Wait()
 
 	_ = outFile.Close()
@@ -394,15 +493,16 @@ func openFifoNonblock(path string) (*os.File, error) {
 
 // pumpPtyToLog 把 PTY 输出追加写入 out.log
 //
-// 只在内存里保留一小段，超过上限时做一次「尾部保留」，防止日志无限膨胀
-// 拖垮前端增量读取（前端按字节 offset 拉取）。
+// 只 write、不 fsync：轮询端（sess_read）只 stat 看文件长度，
+// 页缓存里 write 之后 size 立即可见，逐块 fsync 纯属浪费
+// （机械盘上会把这个吞吐拖死一个数量级）。日志超限的「尾部保留」
+// 同样由 sess_read 统一处理，这里不管。
 func pumpPtyToLog(master *os.File, out *os.File, sessDir string) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := master.Read(buf)
 		if n > 0 {
 			_, _ = out.Write(buf[:n])
-			_ = out.Sync()
 		}
 		if err != nil {
 			// EIO：PTY 从端全部关闭，属于正常结束
@@ -426,6 +526,94 @@ func pumpPipeToPty(pipe *os.File, master *os.File, done *int32) {
 		if n > 0 {
 			if _, werr := master.Write(buf[:n]); werr != nil {
 				return
+			}
+			continue
+		}
+		if err != nil {
+			if err == syscall.EAGAIN || err == io.EOF {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// parseWinsize 解析控制通道的一行指令："<cols> <rows>"
+//
+// 只接受两个正整数，其余一律丢弃（换行、空行、坏数据都当作没看见）。
+func parseWinsize(line string) (cols, rows int, ok bool) {
+	fields := strings.Fields(line)
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	c, err1 := strconv.Atoi(fields[0])
+	r, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil || c <= 0 || r <= 0 {
+		return 0, 0, false
+	}
+	return c, r, true
+}
+
+// pumpCtl 处理控制通道里的指令。目前两种：
+//
+//	"<cols> <rows>"   设置 PTY 窗口尺寸（ioctl TIOCSWINSZ）
+//	"echo 0" / "echo 1" 开关 PTY 从端的 ECHO 位
+//
+// 为什么要有这条独立通道（而不是往 in.pipe 里塞 stty 命令）：
+//
+//	窗口尺寸只能由**持有 master 的一方**用 ioctl(TIOCSWINSZ) 设置，
+//	而 master 只在本进程手里，CGI 摸不到。早期实现因此退而求其次：
+//	把 `stty cols X rows Y` 当命令写进 in.pipe 交给 shell 执行。
+//	后果是这串命令**会被回显在屏幕上**（用户看到一串自己没敲过的 stty），
+//	还会进入 shell 历史；如果当时前台跑着别的程序，更等于往它嘴里塞字符。
+//
+//	回显开关同理：ECHO 位必须直接改在 tty 上，任何「在会话里执行 stty」
+//	的做法都会污染屏幕与历史。改成 ioctl 之后屏幕上干干净净。
+//
+// 读法与 in.pipe 一致：O_RDONLY|O_NONBLOCK 打开，读空返回 EAGAIN 时短暂休眠，
+// 避免忙等；20ms 的节奏对「拖拽调整窗口大小」这种交互完全够用。
+func pumpCtl(ctl *os.File, master *os.File, slave *os.File, done *int32) {
+	buf := make([]byte, 4096)
+	acc := make([]byte, 0, 4096)
+
+	apply := func(line string) {
+		if rest, ok := strings.CutPrefix(line, "echo "); ok {
+			switch strings.TrimSpace(rest) {
+			case "0":
+				_ = setEcho(int(slave.Fd()), false)
+			case "1":
+				_ = setEcho(int(slave.Fd()), true)
+			}
+			return
+		}
+		if cols, rows, ok := parseWinsize(line); ok {
+			_ = ioctlSetWinsize(int(master.Fd()),
+				&winsize{Row: uint16(rows), Col: uint16(cols)})
+		}
+	}
+
+	for {
+		if atomic.LoadInt32(done) != 0 {
+			return
+		}
+		n, err := ctl.Read(buf)
+		if n > 0 {
+			acc = append(acc, buf[:n]...)
+			// 按行切分：一条完整指令对应一次操作
+			for {
+				i := bytes.IndexByte(acc, '\n')
+				if i < 0 {
+					break
+				}
+				line := string(acc[:i])
+				acc = acc[i+1:]
+				apply(line)
+			}
+			// 防御：写端一直不换行的话不要无限增长
+			if len(acc) > 4096 {
+				acc = acc[:0]
 			}
 			continue
 		}

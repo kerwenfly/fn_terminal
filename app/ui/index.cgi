@@ -97,7 +97,18 @@ case "${TARGET_FILE##*.}" in
     *) mime="application/octet-stream" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# 缓存策略：
+#   vendor/（xterm.js 等离线内置库）内容不随版本变化，允许浏览器长缓存，
+#   避免每次打开页面都全量重拉上 MB 的脚本；
+#   应用自己的页面/脚本/样式随版本更新，保持 no-cache。
+# ---------------------------------------------------------------------------
+case "${REL_PATH}" in
+    /vendor/*) cache_ctl="public, max-age=604800" ;;
+    *)         cache_ctl="no-cache" ;;
+esac
+
 echo "Content-Type: $mime"
-echo "Cache-Control: no-cache"
+echo "Cache-Control: $cache_ctl"
 echo ""
 cat "${TARGET_FILE}"

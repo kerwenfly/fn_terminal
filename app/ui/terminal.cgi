@@ -5,18 +5,30 @@
 #   浏览器侧                        动作
 #   /cgi/ThirdParty/terminal/terminal.cgi/create        新建 PTY 会话
 #   /cgi/ThirdParty/terminal/terminal.cgi/exec          执行命令 / 送按键
-#   /cgi/ThirdParty/terminal/terminal.cgi/read          只拉取新增输出（轮询）
+#   /cgi/ThirdParty/terminal/terminal.cgi/read          拉取新增输出（支持长轮询 wait）
 #   /cgi/ThirdParty/terminal/terminal.cgi/resize        调整窗口尺寸
+#   /cgi/ThirdParty/terminal/terminal.cgi/echo          开关 tty 回显（本地回显配套）
 #   /cgi/ThirdParty/terminal/terminal.cgi/keepalive     页面心跳（证明页面还开着）
 #   /cgi/ThirdParty/terminal/terminal.cgi/shutdown      页面关闭 -> 销毁其全部会话
 #   /cgi/ThirdParty/terminal/terminal.cgi/close         关闭并销毁单个会话
 #   /cgi/ThirdParty/terminal/terminal.cgi/info          会话状态（cwd / 退出码 / 存活）
 #
+# 两条贯穿全链路的性能约定（与「输入手感」直接相关）：
+#
+#   1) read 支持**长轮询**（请求体带 wait 毫秒）。
+#      后端挂住直到有新输出或超时，前端拿到响应立刻再发下一轮 ——
+#      于是「总有一次 read 在途」，回显一产生就被带走。
+#      旧实现是固定 400ms 轮询，最坏要白等 400ms 才轮到下一次。
+#
+#   2) exec 是每次按键都要走的路径，必须保持**极轻**：
+#      只写 FIFO，不回读、不跑 GC、不拼状态字段。
+#      （实测去掉这些后单次 exec 从 143ms 降到 55ms，见 session.inc 的说明。）
+#
 # 「会话跟随页面」的约定：
 #   前端为每个标签页生成一个 owner（sessionStorage，标签页内共享、关闭即失效）。
 #   页面每几秒发一次 keepalive 续租；页面关闭时发 shutdown 立刻回收。
 #   若页面异常消失（崩溃/断网），shutdown 发不出去，则由 sess_gc 按心跳超时兜底，
-#   因此**任何请求进来都先跑一次 sess_gc**。
+#   因此除 exec 之外的每个请求进来都会先跑一次 sess_gc。
 #
 # 请求体为 JSON；响应统一 application/json。
 # 终端输出以 base64 承载（原始 PTY 流含 ANSI 转义与二进制），前端还原成文本。
@@ -48,17 +60,37 @@ fi
 # ---------------------------------------------------------------------------
 # 极简 JSON 取值（避免依赖 jq / python，fnOS 上不一定有）
 #   仅满足本接口的固定字段，够用且无外部依赖。
+#
+#   取**第一个**匹配（旧的 sed 贪心写法匹配的是最后一个）：
+#   前端 payload 固定把 data（按键流 base64）放在其它字段之后，若 data
+#   的内容里恰好出现 "sid":"x" 这类文本，贪心匹配会把 sid 解析成假值。
+#   真实字段都在 data 之前出现，首匹配命中的必然是真实字段。
 # ---------------------------------------------------------------------------
 json_str() {
     # $1 = json, $2 = key
     local json="$1" key="$2" out
-    out="$(printf '%s' "${json}" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")"
+    out="$(printf '%s' "${json}" | awk -v k="\"${key}\"" '{
+        i = index($0, k)
+        if (i > 0) {
+            rest = substr($0, i + length(k))
+            sub(/^[[:space:]]*:[[:space:]]*"/, "", rest)
+            n = index(rest, "\"")
+            if (n > 1) { print substr(rest, 1, n - 1); exit }
+        }
+    }')"
     printf '%s' "${out}"
 }
 
 json_num() {
     local json="$1" key="$2" out
-    out="$(printf '%s' "${json}" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p")"
+    out="$(printf '%s' "${json}" | awk -v k="\"${key}\"" '{
+        i = index($0, k)
+        if (i > 0) {
+            rest = substr($0, i + length(k))
+            sub(/^[[:space:]]*:[[:space:]]*/, "", rest)
+            if (match(rest, /^[0-9]+/)) { print substr(rest, RSTART, RLENGTH); exit }
+        }
+    }')"
     [ -z "${out}" ] && out=0
     printf '%s' "${out}"
 }
@@ -108,6 +140,11 @@ fail() {
 SID="$(json_str "${BODY}" "sid")"
 OFFSET="$(json_num "${BODY}" "offset")"
 
+# 长轮询等待时长（毫秒）。
+#   前端传 2500 左右，后端会挂住最多这么久，一有新输出立刻返回。
+#   0 = 立刻返回（老的纯轮询行为），缺省即 0，保证向后兼容。
+WAIT="$(json_num "${BODY}" "wait")"
+
 # 页面（标签页）标识。前端每个标签页生成一个，用于「关页面即回收会话」。
 # 只允许 [A-Za-z0-9_-]，防止被当成路径片段使用。
 OWNER="$(json_str "${BODY}" "owner")"
@@ -126,12 +163,18 @@ esac
 DATA_B64="$(json_str "${BODY}" "data")"
 
 # ---------------------------------------------------------------------------
-# 每次请求都顺手做一次 GC：
+# 顺手做一次 GC：
 #   把「进程已死」的残留目录，以及「心跳过期（页面已关）」的孤儿会话清掉。
 #   shutdown 是正常关闭的快路径；这里是不正常关闭（崩溃/断网/强杀浏览器）的兜底。
-# 例外：keepalive 也要跑（它本身就是给 GC 送新心跳的机会）。
+#
+# 唯一的例外是 exec —— 它是「每敲一个键都要走」的路径，GC 在这里纯属浪费
+# （实测约 19ms，占单次按键后端开销的 1/7 左右）。
+# 不影响回收能力：read 是长轮询，页面开着时**总有一个在途**（约 1.5 秒一轮），
+# 另外 create / keepalive / shutdown 等也都照跑，孤儿依然会被收掉。
 # ---------------------------------------------------------------------------
-sess_gc >/dev/null 2>&1
+if [ "${ACTION}" != "exec" ]; then
+    sess_gc >/dev/null 2>&1
+fi
 
 # ---------------------------------------------------------------------------
 # 分发
@@ -216,10 +259,12 @@ case "${ACTION}" in
             printf '{"ok":false,"error":"写入失败","alive":false}\n'
             exit 0
         fi
+        # 只回执「写入成功」。刻意不返回 data / cwd / rc / user：
+        #   · data 前端本来就一律丢弃（输出只走 read 这一条单通道）；
+        #   · cwd / rc / user 会由紧随其后的长轮询 read 带回状态栏，
+        #     这边省掉一整轮读盘 —— 这是按键手感的关键路径。
         json_head
-        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","data":"%s"}\n' \
-            "$(jstr "${SID}")" "${_OUT_OFFSET}" "${_OUT_ALIVE}" \
-            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" "${_OUT_B64}"
+        printf '{"ok":true,"alive":true}\n'
         ;;
 
     # ---------------- 调整窗口尺寸 ----------------
@@ -233,26 +278,49 @@ case "${ACTION}" in
         sess_resize "${SID}" "${COLS}" "${ROWS}" 2>/dev/null
         sess_read "${SID}" "${OFFSET}"
         json_head
-        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","data":"%s"}\n' \
+        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","truncated":%s,"data":"%s"}\n' \
             "$(jstr "${SID}")" "${_OUT_OFFSET}" "${_OUT_ALIVE}" \
-            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" "${_OUT_B64}"
+            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" \
+            "${_OUT_TRUNCATED:-0}" "${_OUT_B64}"
+        ;;
+
+    # ---------------- 开关 tty 回显 ----------------
+    #
+    #   前端的本地行编辑器要求 shell 不要也回显一遍，否则同一串字符会画两次。
+    #   包装进程在会话创建时已经清掉 ECHO 位，但 login / su 这类登录程序会按
+    #   自己的默认值重置 termios，所以前端在识别到新提示符后会再压一次。
+    #   走控制 FIFO 由包装进程 tcsetattr —— 不在会话里执行 stty，屏幕和历史都干净。
+    echo)
+        [ -n "${SID}" ] || fail "缺少 sid"
+        valid_sid "${SID}" || fail "sid 非法"
+        ON="$(json_num "${BODY}" "on")"
+        case "${ON}" in 0|1) ;; *) ON=0 ;; esac
+        sess_beat "${SID}"
+        sess_set_echo "${SID}" "${ON}" 2>/dev/null
+        json_head
+        printf '{"ok":true}\n'
         ;;
 
     # ---------------- 轮询新增输出 ----------------
+    #
+    #   带 wait 时是**长轮询**：后端最多挂住 wait 毫秒，一有新输出立刻返回。
+    #   前端每次拿到响应就立刻发下一轮，于是「总有一次 read 在途」——
+    #   回显产生的那一刻就被带走，不必等下一个定时器。这是「输入回显慢」的解药。
     read)
         [ -n "${SID}" ] || fail "缺少 sid"
         valid_sid "${SID}" || fail "sid 非法"
         # 轮询本身就是「页面还在」的最强证据，直接续租
         sess_beat "${SID}"
-        if ! sess_read "${SID}" "${OFFSET}"; then
+        if ! sess_read_wait "${SID}" "${OFFSET}" "${WAIT}"; then
             json_head
             printf '{"ok":false,"error":"会话不存在","alive":false}\n'
             exit 0
         fi
         json_head
-        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","data":"%s"}\n' \
+        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","truncated":%s,"data":"%s"}\n' \
             "$(jstr "${SID}")" "${_OUT_OFFSET}" "${_OUT_ALIVE}" \
-            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" "${_OUT_B64}"
+            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" \
+            "${_OUT_TRUNCATED:-0}" "${_OUT_B64}"
         ;;
 
     # ---------------- 状态 ----------------
@@ -261,9 +329,10 @@ case "${ACTION}" in
         valid_sid "${SID}" || fail "sid 非法"
         sess_read "${SID}" "${OFFSET}"
         json_head
-        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","data":""}\n' \
+        printf '{"ok":true,"sid":"%s","offset":%s,"alive":%s,"cwd":"%s","rc":"%s","user":"%s","truncated":%s,"data":""}\n' \
             "$(jstr "${SID}")" "${_OUT_OFFSET}" "${_OUT_ALIVE}" \
-            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")"
+            "$(jstr "${_OUT_CWD}")" "$(jstr "${_OUT_RC}")" "$(jstr "${_OUT_USER}")" \
+            "${_OUT_TRUNCATED:-0}"
         ;;
 
     # ---------------- 页面心跳（续租） ----------------
@@ -313,15 +382,8 @@ case "${ACTION}" in
         printf '{"ok":true,"closed":%s}\n' "${_n}"
         ;;
 
-    # ---------------- 全部关闭（应用停用 / 手工清理） ----------------
-    shutdown_all)
-        for d in "${SESS_ROOT}"/*; do
-            [ -d "${d}" ] || continue
-            sess_close "$(basename "${d}")"
-        done
-        json_head
-        printf '{"ok":true}\n'
-        ;;
+    # 「全部关闭」没有 HTTP 入口 —— 应用停用走 cmd/main stop（本地 CLI），
+    # 不给远程一个能清掉所有人会话的接口。
 
     # ---------------- 关闭会话 ----------------
     close)

@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>本地行编辑器 · 真实字节回放测试</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="terminal.css">
+</head>
+<body>
+<div id="app">
+  <header class="titlebar">
+    <div class="title">终端 &mdash; <span id="titleHost">localhost</span></div>
+    <div class="actions">
+      <input id="sessionName" class="rename" type="text" value="shell" />
+      <select id="authMode" class="sel">
+        <option value="login">账号登录</option>
+        <option value="shell">直接进入 Shell</option>
+      </select>
+      <button id="btnNew" class="btn">＋ 新建</button>
+      <button id="btnClear" class="btn">清屏</button>
+      <button id="btnClose" class="btn danger">关闭</button>
+    </div>
+  </header>
+  <div id="tabs" class="tabs"></div>
+  <main class="term-wrap">
+    <div id="screen" class="screen" tabindex="0">
+      <div id="xterm" class="xterm-host"></div>
+      <div id="boot" class="boot hidden"><div class="boot-inner"><div class="boot-text" id="bootText"></div></div></div>
+      <div id="fallback" class="fallback" style="display:none">
+        <div id="fbOut" class="fb-out"></div>
+        <div class="fb-line"><span id="fbPs1" class="fb-ps1">$</span><input id="fbInput" class="fb-input" /></div>
+      </div>
+    </div>
+  </main>
+  <footer class="statusbar">
+    <span class="st"><i id="stDot" class="st-dot"></i><span id="stConn">连接中</span></span>
+    <span class="st">身份 <b id="stUser">-</b></span>
+    <span class="st">目录 <b id="stCwd">~</b></span>
+    <span class="st">退出码 <b id="stRc">0</b></span>
+    <span class="st">会话 <b id="stSid">-</b></span>
+    <span class="st"></span>
+    <span class="st" id="stMode">xterm</span>
+  </footer>
+</div>
+<pre id="RESULT" style="display:none"></pre>
+
+<script src="fixture.js"></script>
+<script>
+/* =====================================================================
+   服务端替身：**不做任何模拟**，只按顺序回放真实 bash 录下来的字节。
+   fixture.js 里的每一项是 [前端发出去的字节, 服务端回的字节]。
+   ===================================================================== */
+(function () {
+  var PROMPT_B64 = '';            // 由 create 填充（用录制的初始提示符）
+  var seq = window.FIXTURE || [];
+  var cur = 0;
+  var pendingReads = [];
+
+  window.__sent = [];             // 前端发出去的每一段（解码后的文本）
+  window.__echoCalls = [];
+  window.__replayMiss = [];       // 夹具里没找到的发送内容（排障用）
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64 || ''), n = bin.length, out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function bytesToText(b) {
+    try { return new TextDecoder('utf-8').decode(b); } catch (e) { return ''; }
+  }
+  function textToB64(s) {
+    var b = new TextEncoder().encode(s), bin = '';
+    for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+    return btoa(bin);
+  }
+
+  function resp(o) {
+    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(o); } });
+  }
+  // 顺序匹配：前端会把在途期间到达的按键合并成一批（铁律二），
+  // 所以一个请求可能对应夹具里**连续若干条**的拼接。按拼接去匹配。
+  function take(body) {
+    for (var start = cur; start < Math.min(cur + 32, seq.length); start++) {
+      var acc = '', out = '';
+      for (var k = start; k < Math.min(start + 32, seq.length); k++) {
+        acc += seq[k][0];
+        out = outB64Concat(out, seq[k][1]);
+        if (acc === body) { cur = k + 1; return out; }
+        if (body.indexOf(acc) !== 0) break;      // 已经超出这次请求了
+      }
+    }
+    window.__replayMiss.push(body);
+    return '';
+  }
+  function outB64Concat(accB64, b64) {
+    if (!accB64) return b64;
+    if (!b64) return accB64;
+    var a = b64ToBytes(accB64), b = b64ToBytes(b64);
+    var out = new Uint8Array(a.length + b.length);
+    out.set(a, 0); out.set(b, a.length);
+    var bin = '';
+    for (var i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
+    return btoa(bin);
+  }
+
+  window.fetch = function (url, opt) {
+    var action = String(url).split('/').pop();
+    var body = {};
+    try { body = opt && opt.body ? JSON.parse(opt.body) : {}; } catch (e) {}
+
+    if (action === 'create') {
+      // 录制下来的第一条（!= 'send'）就是初始提示符
+      return resp({ ok: true, sid: 's1', offset: 0, alive: true, mode: 'shell',
+                    data: textToB64('\x1b[?2004hroot@nas:~# ') });
+    }
+    if (action === 'echo') { window.__echoCalls.push(body); return resp({ ok: true }); }
+    if (action === 'resize') return resp({ ok: true, sid: 's1', offset: 0, alive: true, data: '' });
+    if (action === 'keepalive' || action === 'shutdown' || action === 'close') return resp({ ok: true });
+
+    if (action === 'exec') {
+      var txt = bytesToText(b64ToBytes(body.data || ''));
+      window.__sent.push(txt);
+      var out = take(txt);
+      if (out) setTimeout(function () { pushB64(out); }, 4);
+      return resp({ ok: true, alive: true });
+    }
+    if (action === 'read') {
+      window.__reads = (window.__reads || 0) + 1;
+      return new Promise(function (res) { pendingReads.push(res); });
+    }
+    return resp({ ok: true });
+  };
+
+  var queue = [];
+  function pushB64(b64) { queue.push(b64); serve(); }
+  window.__push = function (text) { pushB64(textToB64(text)); };
+  window.__probeTip = function () {
+    return { cur: cur, at: seq[cur] ? seq[cur][0] : null,
+             hasRead: pendingReads.length, queued: queue.length };
+  };
+  function serve() {
+    if (!pendingReads.length || !queue.length) return;
+    var res = pendingReads.shift();
+    var b64 = queue.join('');
+    queue.length = 0;
+    window.__serves = (window.__serves || []);
+    window.__serves.push(b64.length);
+    res({ ok: true, status: 200, json: function () {
+      return Promise.resolve({ ok: true, sid: 's1', offset: 999, alive: true,
+                               cwd: '/', rc: '0', user: 'root', data: b64 });
+    } });
+  }
+})();
+window.__errors = [];
+window.addEventListener('error', function (e) { window.__errors.push(String(e.message || e)); });
+</script>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
+<script src="app.js"></script>
+
+<script>
+(function () {
+  /* 【关键】app.js 末尾会在 DOMContentLoaded 时自动 App.init()，
+     它内部 restore()||newSession() 会**再建一个会话**。测试要自己掌控
+     唯一的会话，否则那个多余会话（非激活）会抢走 read 的响应 ——
+     这正是之前「服务端响应进不了 append」的真凶。
+     此刻 DOMContentLoaded 还没触发，换掉 init 即可。 */
+  window.__term.init = function () {};
+  try { localStorage.removeItem('terminal.sessions.v2'); } catch (e) {}
+
+  var R = [], pass = 0, fail = 0;
+  function ok(name, cond, extra) {
+    if (cond) { pass++; R.push('PASS  ' + name); }
+    else { fail++; R.push('FAIL  ' + name + (extra ? '\n        [' + extra + ']' : '')); }
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function termText(s) {
+    var buf = s.term.buffer.active, out = [];
+    var last = buf.baseY + buf.cursorY;
+    for (var y = 0; y <= last; y++) {
+      var l = buf.getLine(y);
+      // 行尾空格是「擦字」留下的，肉眼不可见 —— 断言时统一去掉
+      out.push((l ? l.translateToString(true) : '').replace(/[ \t]+$/, ''));
+    }
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.join('\n');
+  }
+  function count(s, needle) {
+    var t = termText(s), n = 0, i = 0;
+    while ((i = t.indexOf(needle, i)) >= 0) { n++; i += needle.length; }
+    return n;
+  }
+  function last(s, n) { return termText(s).slice(-n); }
+  function screenLines(s) {                      // 排障用：逐行原样打印（含行尾空格）
+    var buf = s.term.buffer.active, out = [];
+    var lastY = buf.baseY + buf.cursorY;
+    for (var y = 0; y <= lastY; y++) {
+      var l = buf.getLine(y);
+      out.push(l ? l.translateToString(true) : '');
+    }
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out;
+  }
+  function type(s, str) { s.typeInput(str); }
+  function sentText() { return window.__sent.join(''); }
+
+  window.addEventListener('DOMContentLoaded', function () { setTimeout(main, 80); });
+
+  async function main() {
+    var App = window.__term;
+    try {
+      App.newSession('t', 'shell');
+      await sleep(200);
+      var s = App.active;
+      if (!s || !s.sid) { R.push('FAIL  会话没建起来'); return done(); }
+
+      // 探针：记录每一批进入 append 的原始字节（排障用）
+      window.__appends = [];
+      window.__deltas = [];
+      var origAppend = s.append;
+      s.append = function (b) {
+        var h = '';
+        for (var i = 0; i < b.length; i++) h += (b[i] < 16 ? '0' : '') + b[i].toString(16) + ' ';
+        window.__appends.push(h.trim());
+        return origAppend.call(this, b);
+      };
+      var origDelta = s.handleDelta;
+      s.handleDelta = function (d) {
+        window.__deltas.push(d ? { offset: d.offset, len: (d.data || '').length, alive: d.alive } : null);
+        return origDelta.call(this, d);
+      };
+
+      ok('0a 会话建立 + 初始提示符', /root@nas:~#\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('0b 全局只有一个会话（自动初始化已禁用）', (App.sessions || []).length === 1,
+         'n=' + (App.sessions || []).length);
+
+      /* ---------- 1. 自动安装报告绑定：必须不留痕迹 ---------- */
+      await sleep(300);
+      ok('1a 已发出 bind -x 安装命令', sentText().indexOf('bind -x') >= 0,
+         JSON.stringify(window.__sent));
+      ok('1b 安装命令进了历史也要删', sentText().indexOf('history -d') >= 0, '');
+      ok('1c 安装过程屏幕上没有第二行/第二个提示符',
+         count(s, 'root@nas:~#') === 1, JSON.stringify(termText(s)));
+      ok('1d 锚点已就位', !!s.anchor, JSON.stringify(s.anchor));
+
+      /* ---------- 2. 打字：本地即时、服务端零字节、不重复 ---------- */
+      type(s, 'e');
+      await sleep(0);
+      ok('2a 敲 e 立刻可见', /#\s?e$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, 'c'); type(s, 'h'); type(s, 'o');
+      await sleep(60);
+      ok('2b 本地即时显示 echo', /#\s?echo$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('2c echo 只出现一次', count(s, 'echo') === 1, 'count=' + count(s, 'echo'));
+
+      type(s, ' hi');
+      await sleep(60);
+      ok('2d 空格也能插入', /#\s?echo hi$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('2e 模型正确', s.line === 'echo hi' && s.cur === 7,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+
+      /* ---------- 2f 安装护栏：用户已经在打字时不许安装 ----------
+         安装用的是 sameLine 规范化（清掉当前行再重画提示符），
+         要是这时候用户已经打了半行字，屏幕上半行会被抹掉。 */
+      var sendsBefore = window.__sent.length;
+      s.reporterReady = false;
+      s.installAt = 0;
+      s.promptAt = Date.now();       // 伪装成「刚出提示符」
+      s.maybeInstallReporter();
+      await sleep(40);
+      ok('2f 正在打字时不会偷偷安装', window.__sent.length === sendsBefore,
+         JSON.stringify(window.__sent.slice(sendsBefore)));
+      s.reporterReady = true;        // 放回「已确认」状态，免得后续提示符反复触发安装
+      s.installAt = Date.now();
+
+      /* ---------- 3. 回车：换行只出现一次 ---------- */
+      type(s, '\r');
+      await sleep(250);
+      var t3 = termText(s);
+      R.push('DEBUG read 次数=' + window.__reads + ' serve=' + JSON.stringify(window.__serves) +
+             ' 会话数=' + (App.sessions || []).length);
+      ok('3a 命令输出出现', /\nhi\n/.test(t3), JSON.stringify(t3));
+      ok('3b 没有多余空行', t3.indexOf('\n\n') < 0, JSON.stringify(t3));
+      ok('3c 提示符回到行尾', /root@nas:~#\s*$/.test(t3), JSON.stringify(t3));
+      ok('3d 整行结构正确', /#\s?echo hi\nhi\nroot@nas:~#\s*$/.test(t3), JSON.stringify(t3));
+      ok('3e 模型已清空', s.line === '' && s.cur === 0, 'line=' + JSON.stringify(s.line));
+
+      /* ---------- 4. 退格 / 方向 / 删除 / Home：全部本地，服务端全程静默 ---------- */
+      var before = window.__sent.length;
+      type(s, 'a'); type(s, 'b'); type(s, 'c');
+      await sleep(0);
+      ok('4a abc 本地显示', /#\s?abc$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x7f');
+      await sleep(0);
+      ok('4b 退格立刻生效 -> ab', /#\s?ab$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x1b[D'); await sleep(0); type(s, 'X'); await sleep(0);
+      ok('4c 左移后插入 -> aXb', /#\s?aXb$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x1b[3~'); await sleep(0);
+      ok('4d Delete -> aX', /#\s?aX$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x1b[H'); await sleep(0); type(s, 'Z'); await sleep(0);
+      ok('4e Home 后插到行首 -> ZaX', /#\s?ZaX$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x1b[F'); await sleep(0); type(s, '9'); await sleep(0);
+      ok('4f End 后追加 -> ZaX9', /#\s?ZaX9$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x15'); await sleep(200);
+      ok('4g Ctrl-U 清空本行', /root@nas:~#\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('4h 期间服务端没有任何回显字节落地（全程无重复）',
+         count(s, 'ab') === 0 && count(s, 'ZaX9') === 0, JSON.stringify(termText(s)));
+
+      /* ---------- 5. Tab 补全：交棒 + OSC 报告 + 本地重画 ---------- */
+      type(s, 'c'); type(s, 'd'); type(s, ' '); type(s, '/');
+      type(s, 't'); type(s, 'm');
+      await sleep(60);
+      ok('5a 交棒前本地显示 cd /tm', /#\s?cd \/tm$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\t');
+      await sleep(250);
+      var t5 = termText(s);
+      ok('5b 补全结果出现在屏幕上', /#\s?cd \/tmp\/\s*$/.test(t5), JSON.stringify(t5));
+      ok('5c 补全结果只出现一次', count(s, 'cd /tmp/') === 1, 'count=' + count(s, 'cd /tmp/'));
+      ok('5d 残余的 cd /tm 已擦干净',
+         count(s, 'cd /tm') === count(s, 'cd /tmp/'), JSON.stringify(t5));
+      ok('5e 模型同步为补全结果', s.line === 'cd /tmp/' && s.cur === 8,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+      ok('5f 报告键确实跟在同一批里发出去', /^\t\u0018\u0012$/.test(window.__sent[window.__sent.length - 1]),
+         JSON.stringify(window.__sent[window.__sent.length - 1]));
+      type(s, 'e');
+      await sleep(120);
+      ok('5g 补全后继续输入接在正确位置', /#\s?cd \/tmp\/e$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('5h 继续输入不重复', count(s, 'cd /tmp/e') === 1, JSON.stringify(termText(s)));
+      type(s, '\x15');
+      await sleep(200);
+
+      /* ---------- 6. 历史 ↑↓：交棒 + 报告 ---------- */
+      type(s, '\x1b[A');
+      await sleep(250);
+      ok('6a ↑ 取到最近一条历史', /#\s?echo one\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('6b 模型同步为历史行', s.line === 'echo one' && s.cur === 8,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+      type(s, '\x1b[A');
+      await sleep(250);
+      var t6 = termText(s);
+      ok('6c 再按 ↑ 取到上一条', /#\s?echo hi\s*$/.test(t6), JSON.stringify(t6));
+      ok('6d 历史行没有叠字', count(s, 'echo hi') >= 1 && /#\s?echo hi\s*$/.test(t6), JSON.stringify(t6));
+      type(s, '\x1b[B');
+      await sleep(250);
+      ok('6e ↓ 回到下一条', /#\s?echo one\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x15');
+      await sleep(200);
+
+      /* ---------- 7. Ctrl-C：三个换行要折成一个 ---------- */
+      type(s, 'a'); type(s, 'b');
+      await sleep(60);
+      type(s, '\x03');
+      await sleep(250);
+      var t7 = termText(s);
+      ok('7a Ctrl-C 打出了 ^C', t7.indexOf('^C') >= 0, JSON.stringify(t7));
+      ok('7b 只多出一个换行（不是三个）', /ab\^C\nroot@nas:~#\s*$/.test(t7), JSON.stringify(t7));
+      ok('7c 行模型已清空', s.line === '' && s.cur === 0, 'line=' + JSON.stringify(s.line));
+
+      /* ---------- 8. 中文 + 退格 ---------- */
+      type(s, '中'); type(s, '文');
+      await sleep(60);
+      ok('8a 中文本地即时显示', /#\s?中文$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('8b 中文模型按字符计数', s.line === '中文' && s.cur === 2,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+      type(s, '\x7f');
+      await sleep(120);
+      ok('8c 中文退格按两格宽度擦掉', /#\s?中\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      type(s, '\x15');
+      await sleep(200);
+
+      /* ---------- 9. Ctrl-L：纯本地，不发给服务端 ---------- */
+      var sendBefore = window.__sent.length;
+      type(s, '\x0c');
+      await sleep(150);
+      ok('9a Ctrl-L 不发往服务端', window.__sent.length === sendBefore,
+         JSON.stringify(window.__sent.slice(sendBefore)));
+      ok('9b Ctrl-L 后提示符仍在屏幕上', /root@nas:~#\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+
+      /* ---------- 10. read -p：内核回显关掉后由本地接管 ---------- */
+      var cmd = 'read -p \'Name: \' n; echo "hi $n"';
+      for (var qi = 0; qi < cmd.length; qi++) type(s, cmd[qi]);
+      await sleep(80);
+      ok('10a 命令本身本地显示完整', termText(s).indexOf(cmd) >= 0, JSON.stringify(last(s, 90)));
+      type(s, '\r');
+      await sleep(250);
+      ok('10b read -p 的提示符出现', /Name:\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('10c 回车后没有多余空行', termText(s).indexOf('\n\n') < 0, JSON.stringify(termText(s)));
+      type(s, 'b'); type(s, 'o'); type(s, 'b');
+      await sleep(80);
+      ok('10d 内核不回显时由本地画 -> 只有一个 bob', count(s, 'bob') === 1,
+         JSON.stringify(termText(s)));
+      type(s, '\r');
+      await sleep(250);
+      var t10 = termText(s);
+      // 内核不回显 => "Name: " 后面那个 bob 完全是本地画的；
+      // 所以 bob 正确出现两次（一处在提示符后、一处在结果里）。
+      ok('10e 结果正确且不重复', count(s, 'hi bob') === 1 && count(s, 'Name: bob') === 1,
+         JSON.stringify(t10));
+      ok('10f 回到提示符', /root@nas:~#\s*$/.test(t10), JSON.stringify(t10));
+
+      /* ---------- 11. OSC 绝不能泄漏到屏幕上 ---------- */
+      ok('11a 屏幕上没有 OSC 残留', termText(s).indexOf(']777') < 0 && termText(s).indexOf('777') < 0,
+         JSON.stringify(last(s, 120)));
+
+      /* ---------- 12. echo=0 的兜底压制 ---------- */
+      ok('12a 已发过 echo=0 请求', window.__echoCalls.length >= 1 && window.__echoCalls[0].on === 0,
+         JSON.stringify(window.__echoCalls));
+
+      /* ---------- 13. 夹具没有错位 ---------- */
+      ok('13a 回放没有出现未命中的发送', window.__replayMiss.length === 0,
+         JSON.stringify(window.__replayMiss));
+
+      /* ---------- 14. 无未捕获错误 ---------- */
+      ok('14a 无未捕获 JS 错误', window.__errors.length === 0, JSON.stringify(window.__errors));
+    } catch (e) {
+      fail++;
+      R.push('FAIL  异常: ' + ((e && e.stack) || e));
+    }
+    done();
+  }
+
+  function done() {
+    R.unshift('== 本地行编辑器（真实字节回放）: ' + pass + ' 通过 / ' + fail + ' 失败 ==');
+    document.getElementById('RESULT').textContent = R.join('\n');
+  }
+})();
+</script>
+</body>
+</html>

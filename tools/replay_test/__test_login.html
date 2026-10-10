@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>登录模式 · 回显静默协商 · 真实字节回放测试</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="terminal.css">
+</head>
+<body>
+<div id="app">
+  <header class="titlebar">
+    <div class="title">终端 &mdash; <span id="titleHost">localhost</span></div>
+    <div class="actions">
+      <input id="sessionName" class="rename" type="text" value="login" />
+      <select id="authMode" class="sel">
+        <option value="login">账号登录</option>
+        <option value="shell">直接进入 Shell</option>
+      </select>
+      <button id="btnNew" class="btn">＋ 新建</button>
+      <button id="btnClear" class="btn">清屏</button>
+      <button id="btnClose" class="btn danger">关闭</button>
+    </div>
+  </header>
+  <div id="tabs" class="tabs"></div>
+  <main class="term-wrap">
+    <div id="screen" class="screen" tabindex="0">
+      <div id="xterm" class="xterm-host"></div>
+      <div id="boot" class="boot hidden"><div class="boot-inner"><div class="boot-text" id="bootText"></div></div></div>
+      <div id="fallback" class="fallback" style="display:none">
+        <div id="fbOut" class="fb-out"></div>
+        <div class="fb-line"><span id="fbPs1" class="fb-ps1">$</span><input id="fbInput" class="fb-input" /></div>
+      </div>
+    </div>
+  </main>
+  <footer class="statusbar">
+    <span class="st"><i id="stDot" class="st-dot"></i><span id="stConn">连接中</span></span>
+    <span class="st">身份 <b id="stUser">-</b></span>
+    <span class="st">目录 <b id="stCwd">~</b></span>
+    <span class="st">退出码 <b id="stRc">0</b></span>
+    <span class="st">会话 <b id="stSid">-</b></span>
+    <span class="st"></span>
+    <span class="st" id="stMode">xterm</span>
+  </footer>
+</div>
+<pre id="RESULT" style="display:none"></pre>
+
+<script>window.DBG = false;   // 排障时改成 true：会把每次写屏的字节一起打出来</script>
+<script src="fixture_login.js"></script>
+<script>
+/* =====================================================================
+   登录模式的服务端替身：与 __test.html 一样**不做任何模拟**。
+   第 0 项（TESTCFG.createData）是 login 阶段的初始输出，其余按顺序回放。
+   ===================================================================== */
+(function () {
+  var CFG = window.TESTCFG || { mode: 'login', createData: '' };
+  var seq = window.FIXTURE || [];
+  var cur = 0;
+  var pendingReads = [];
+
+  window.__sent = [];
+  window.__echoCalls = [];
+  window.__replayMiss = [];
+  window.__pushes = [];
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64 || ''), n = bin.length, out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function bytesToText(b) {
+    try { return new TextDecoder('utf-8').decode(b); } catch (e) { return ''; }
+  }
+  function outB64Concat(accB64, b64) {
+    if (!accB64) return b64;
+    if (!b64) return accB64;
+    var a = b64ToBytes(accB64), b = b64ToBytes(b64);
+    var out = new Uint8Array(a.length + b.length);
+    out.set(a, 0); out.set(b, a.length);
+    var bin = '';
+    for (var i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
+    return btoa(bin);
+  }
+  function resp(o) {
+    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(o); } });
+  }
+  /* 流式匹配：夹具的一条可能被**好几个**请求吃完（逐字发送），
+     一个请求也可能吃掉连续好几条（在途合并）。按字符流推进，
+     对不上就记一笔 __replayMiss。 */
+  var off = 0;                              // seq[cur][0] 已经消费掉的前 off 个字符
+  function take(body) {
+    var out = '', i = 0;
+    while (i < body.length) {
+      if (cur >= seq.length) { window.__replayMiss.push(body); return out; }
+      var step = seq[cur][0] || '';
+      var avail = step.length - off;
+      if (avail <= 0) { out = outB64Concat(out, seq[cur][1]); cur++; off = 0; continue; }
+      var k = Math.min(avail, body.length - i);
+      if (step.substr(off, k) !== body.substr(i, k)) { window.__replayMiss.push(body); return out; }
+      if (k === avail) { out = outB64Concat(out, seq[cur][1]); cur++; off = 0; }
+      else off += k;
+      i += k;
+    }
+    return out;
+  }
+
+  window.fetch = function (url, opt) {
+    var action = String(url).split('/').pop();
+    var body = {};
+    try { body = opt && opt.body ? JSON.parse(opt.body) : {}; } catch (e) {}
+
+    if (action === 'create') {
+      return resp({ ok: true, sid: 's1', offset: 0, alive: true,
+                    mode: CFG.mode, login: '', cwd: '', rc: '',
+                    data: CFG.createData });
+    }
+    if (action === 'echo') { window.__echoCalls.push(body); return resp({ ok: true }); }
+    if (action === 'resize') return resp({ ok: true, sid: 's1', offset: 0, alive: true, data: '' });
+    if (action === 'keepalive' || action === 'shutdown' || action === 'close') return resp({ ok: true });
+
+    if (action === 'exec') {
+      var txt = bytesToText(b64ToBytes(body.data || ''));
+      window.__sent.push(txt);
+      var out = take(txt);
+      if (out) setTimeout(function () { pushB64(out); }, 4);
+      return resp({ ok: true, alive: true });
+    }
+    if (action === 'read') {
+      return new Promise(function (res) { pendingReads.push(res); });
+    }
+    return resp({ ok: true });
+  };
+
+  var queue = [];
+  function pushB64(b64) {
+    window.__pushes.push(b64.length);
+    queue.push(b64);
+    serve();
+  }
+  function serve() {
+    while (pendingReads.length && queue.length) {
+      var b64 = queue.shift();
+      var res = pendingReads.shift();
+      res({ ok: true, status: 200, json: function () {
+        return Promise.resolve({ ok: true, sid: 's1', offset: 0, alive: true,
+                                 cwd: '/', rc: '0', user: 'root', data: b64 });
+      } });
+    }
+  }
+  window.__push = function (text) {
+    var b = new TextEncoder().encode(text), bin = '';
+    for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+    pushB64(btoa(bin));
+  };
+  window.__tip = function () { return { cur: cur, at: seq[cur] ? seq[cur][0] : null,
+                                        reads: pendingReads.length, queued: queue.length }; };
+})();
+window.__errors = [];
+window.addEventListener('error', function (e) { window.__errors.push(String(e.message || e)); });
+</script>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
+<script src="app.js"></script>
+
+<script>
+(function () {
+  /* app.js 末尾会在 DOMContentLoaded 时自动 App.init()，它会再建一个会话并
+     抢走 read 的响应。测试要自己掌控唯一的会话，所以先把 init 换掉。 */
+  window.__term.init = function () {};
+  try { localStorage.removeItem('terminal.sessions.v2'); } catch (e) {}
+
+  var R = [], pass = 0, fail = 0;
+  function ok(name, cond, extra) {
+    if (cond) { pass++; R.push('PASS  ' + name); }
+    else { fail++; R.push('FAIL  ' + name + (extra ? '\n        [' + extra + ']' : '')); }
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function termText(s) {
+    var buf = s.term.buffer.active, out = [];
+    var last = buf.baseY + buf.cursorY;
+    for (var y = 0; y <= last; y++) {
+      var l = buf.getLine(y);
+      out.push((l ? l.translateToString(true) : '').replace(/[ \t]+$/, ''));
+    }
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.join('\n');
+  }
+  function count(s, needle) {
+    var t = termText(s), n = 0, i = 0;
+    while ((i = t.indexOf(needle, i)) >= 0) { n++; i += needle.length; }
+    return n;
+  }
+  /* 逐字送入（登录阶段是原始透传，一个字符一个 exec，和真实键盘一致） */
+  async function typeChars(s, str, dt) {
+    for (var i = 0; i < str.length; i++) { s.typeInput(str[i]); await sleep(dt || 8); }
+  }
+  /* 一次性送入：不 await，让序列化把它们合并成**一个** exec。
+     夹具里 "cd /tm" 是一整条，逐字送会每条都落空（回放对不上）。 */
+  function typeBatch(s, str) {
+    for (var i = 0; i < str.length; i++) s.typeInput(str[i]);
+  }
+  function lineCount(s, txt) {
+    var lines = termText(s).split('\n'), n = 0;
+    for (var i = 0; i < lines.length; i++) if (lines[i] === txt) n++;
+    return n;
+  }
+  function sentText() { return window.__sent.join(''); }
+  function lastSent() { return window.__sent[window.__sent.length - 1]; }
+
+  window.addEventListener('DOMContentLoaded', function () { setTimeout(main, 80); });
+
+  async function main() {
+    var App = window.__term;
+    var SILENCE_CMD = 'stty -echo 2>/dev/null; history -d $((HISTCMD-1)) 2>/dev/null';
+    try {
+      App.newSession('t', 'login');
+      await sleep(160);
+      var s = App.active;
+      if (!s || !s.sid) { R.push('FAIL  会话没建起来'); return done(); }
+      /* 抓包：记录每一次真正写到终端的字节（排障用，也随结果一起打印） */
+      window.__writes = [];
+      (function () {
+        var w = s.term.write.bind(s.term);
+        s.term.write = function (b, cb) {
+          try {
+            if (typeof b === 'string') window.__writes.push(b);
+            else window.__writes.push(new TextDecoder('utf-8').decode(b));
+          } catch (e) { window.__writes.push('<bin>'); }
+          return w(b, cb);
+        };
+        var ap = s.append.bind(s);
+        window.__appends = [];
+        s.append = function (bytes) {
+          var t = '<bin>';
+          try { t = new TextDecoder('utf-8').decode(bytes); } catch (e) {}
+          window.__appends.push([t, s.nlMode, s.promptText, s.line]);
+          return ap(bytes);
+        };
+      })();
+
+      /* ---------- 1. login 阶段：本地不画，原样透传 ---------- */
+      ok('1a create 带上 login 模式与初始数据',
+         s.mode === 'login' && /FnNas login:\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('1b 处于用户名阶段（loginPhase）', s.loginPhase === true);
+      ok('1c 用户名阶段本地不画', s.canEdit() === false);
+
+      var n0 = window.__sent.length;
+      await typeChars(s, 'root', 8);
+      await sleep(120);
+      ok('1d 用户名逐字发给服务端', window.__sent.slice(n0).join('') === 'root',
+         JSON.stringify(window.__sent.slice(n0)));
+      ok('1e 屏幕上出现内核回显的 root', /login:\s*root\s*$/.test(termText(s)),
+         JSON.stringify(termText(s)));
+
+      /* ---------- 2. 密码阶段 ---------- */
+      s.typeInput('\r');
+      await sleep(120);
+      ok('2a 出现 Password: 提示', /Password:\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('2b 密码阶段关掉本地回显（noEcho）', s.noEcho === true);
+      ok('2c 记住「见过密码提示」', s.sawPassword === true);
+
+      await typeChars(s, 's3cret', 8);
+      await sleep(120);
+      ok('2d 密码不回显到屏幕上', count(s, 's3cret') === 0, JSON.stringify(termText(s)));
+
+      /* ---------- 3. 登录完成 -> 自动注入静默命令 ---------- */
+      var nBefore = window.__sent.length;
+      s.typeInput('\r');
+      await sleep(200);
+      ok('3a 出现 motd 与 shell 提示符', /Welcome to fnOS/.test(termText(s)) &&
+         /root@nas:~#\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('3b 走出用户名阶段', s.loginPhase === false);
+
+      var auto1 = window.__sent.slice(nBefore).filter(function (x) { return x.indexOf('stty -echo') === 0; });
+      ok('3c 自动注入了静默命令（这是登录模式必须做的那一步）', auto1.length >= 1,
+         JSON.stringify(window.__sent.slice(nBefore)));
+
+      await sleep(400);            // 让第一次注入的判定走完（会被回显 -> 再注入一次）
+      ok('3d 静默命令的回显没有留在屏幕上', count(s, 'stty -echo') === 0, JSON.stringify(termText(s)));
+      ok('3e 协商完成，回显已确认按住', s.echoSilenced === true, 'tries=' + s.silenceTries);
+      ok('3f 没有退回服务端回显', s.serverEcho === false);
+
+      /* ---------- 4. 静默之后：打字完全本地 ---------- */
+      await sleep(200);            // 等报告绑定装好
+      ok('4a 报告绑定已确认可用', s.reporterReady === true);
+      ok('4b 绑定的命令文本没有出现在屏幕上', count(s, 'bind -x') === 0, JSON.stringify(termText(s)));
+      ok('4c 本地回显已启用', s.canEdit() === true);
+
+      var p0 = window.__pushes.length;
+      s.typeInput('echo hi');
+      await sleep(150);
+      ok('4d 打字照常发给服务端', lastSent() === 'echo hi', JSON.stringify(lastSent()));
+      ok('4e 服务端一个字都没回（可靠本地回显的前提）', window.__pushes.length === p0,
+         'pushes=' + JSON.stringify(window.__pushes.slice(p0)));
+      ok('4f 屏幕上「echo hi」只有一份', count(s, 'echo hi') === 1, JSON.stringify(termText(s)));
+
+      s.typeInput('\r');
+      await sleep(200);
+      ok('4g 回车后命令真的执行了，且输出只出现一次',
+         lineCount(s, 'hi') === 1 && lineCount(s, 'echo hi') === 0 &&
+         lineCount(s, 'root@nas:~# echo hi') === 1, JSON.stringify(termText(s)));
+
+      /* ---------- 5. Tab 交棒 ---------- */
+      typeBatch(s, 'cd /tm');
+      await sleep(120);
+      s.typeInput('\t');
+      await sleep(250);
+      ok('5a Tab 与报告键在同一批里发出', lastSent() === '\t\u0018\u0012', JSON.stringify(lastSent()));
+      ok('5b 补全结果同步到屏幕上', /cd \/tmp\/\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('5c 屏幕上没有 OSC 残留', count(s, ']777') === 0 && count(s, '777;') === 0, JSON.stringify(termText(s)));
+      ok('5d 模型与服务端一致', s.line === 'cd /tmp/' && s.cur === 8,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+
+      s.typeInput('\r');
+      await sleep(200);
+
+      /* ---------- 6. 退格 / 方向键（本地处理，服务端静默） ---------- */
+      var p1 = window.__pushes.length;
+      s.typeInput('echo zz');
+      await sleep(80);
+      s.typeInput('\x7f');
+      await sleep(120);
+      ok('6a 退格被本地处理', s.line === 'echo z' && s.cur === 6,
+         'line=' + JSON.stringify(s.line) + ' cur=' + s.cur);
+      ok('6b 退格全本地，服务端一个字都没回', window.__pushes.length === p1,
+         'pushes=' + JSON.stringify(window.__pushes.slice(p1)));
+      ok('6c 屏幕上显示的是退格后的结果', count(s, 'echo zz') === 0 && count(s, 'echo z') === 1,
+         JSON.stringify(termText(s)));
+      s.typeInput('\r');
+      await sleep(200);
+      ok('6d 执行的是退格后的命令', count(s, 'command not found') === 0 &&
+         count(s, 'z') >= 1, JSON.stringify(termText(s)));
+
+      /* ---------- 7. 方向键 + Ctrl-C ---------- */
+      s.typeInput('echo ok');
+      await sleep(80);
+      s.typeInput('\x1b[D'); await sleep(60);
+      s.typeInput('\x1b[D'); await sleep(60);
+      ok('7a 左方向键只动本地光标', s.cur === 5, 'cur=' + s.cur);
+      s.typeInput('\x1b[C'); await sleep(60);
+      ok('7b 右方向键只动本地光标', s.cur === 6, 'cur=' + s.cur);
+      var p2 = window.__pushes.length;
+      s.typeInput('\x03');
+      await sleep(300);
+      ok('7c Ctrl-C 把这一行丢掉了（没执行）', s.line === '' && s.cur === 0,
+         'line=' + JSON.stringify(s.line));
+      ok('7d Ctrl-C 之后出现新提示符', /root@nas:~#\s*$/.test(termText(s)), JSON.stringify(termText(s)));
+      ok('7e 屏幕上没有未执行的命令输出', count(s, 'command not found') === 0,
+         JSON.stringify(termText(s)));
+
+      /* ---------- 8. 降级路径（单元断言，不依赖 bash） ---------- */
+      (function () {
+        var t = Object.create(Object.getPrototypeOf(s));
+        t.mode = 'login'; t.echoSilenced = false; t.serverEcho = false; t.sawPassword = true;
+        t.silenceAt = 1; t.silenceTries = 1; t.silenceHeard = true;
+        t.send = function () {}; t.resetLine = function () {};
+        t.silenceStep();                     // 第二次注入
+        ok('8a 第二次注入之后仍在回显 -> 再试一次', t.silenceAt > 0 && t.silenceTries === 2);
+        t.silenceAt = 2; t.silenceHeard = true;
+        t.silenceStep();                     // 还是被回显 -> 放弃
+        ok('8b 两次都被回显 -> 退回服务端回显', t.serverEcho === true && t.localEcho === false);
+        ok('8c 退回之后本地不再画', t.canEdit() === false);
+        ok('8d 退回之后不再装报告绑定', t.needSilence() === false);
+      })();
+
+      ok('9a 没有未捕获的 JS 错误', window.__errors.length === 0, JSON.stringify(window.__errors));
+      ok('9b 夹具全部命中（没有发送内容对不上）', window.__replayMiss.length === 0,
+         JSON.stringify(window.__replayMiss.slice(0, 4)));
+      ok('9c 屏幕不含任何静默/绑定命令的痕迹',
+         count(s, 'stty ') === 0 && count(s, 'history -d') === 0 && count(s, 'bind ') === 0,
+         JSON.stringify(termText(s)));
+      ok('9d 提示符没有被叠在同一行里（原地覆盖真的原地了）',
+         count(s, 'root@nas:~# root@nas:~#') === 0, JSON.stringify(termText(s)));
+      R.push('--- 屏幕最终内容 ---\n' + termText(s));
+      R.push('--- 发出的内容 ---\n' + JSON.stringify(window.__sent));
+      if (window.DBG || fail) {
+        R.push('--- 写入终端的字节 ---');
+        for (var w = 0; w < window.__writes.length; w++) {
+          R.push('  [' + w + '] ' + JSON.stringify(window.__writes[w]));
+        }
+        R.push('--- append 的输入（[文本, nlMode, promptText, line]）---');
+        for (var w = 0; w < window.__appends.length; w++) {
+          R.push('  [' + w + '] ' + JSON.stringify(window.__appends[w]));
+        }
+      }
+    } catch (e) {
+      fail++; R.push('FAIL  抛异常: ' + (e && e.stack ? e.stack : e));
+    }
+    done();
+  }
+
+  function done() {
+    var head = '== 登录模式·回显静默协商（真实字节回放）: ' + pass + ' 通过 / ' + fail + ' 失败 ==';
+    document.getElementById('RESULT').textContent = head + '\n' + R.join('\n');
+    document.title = head;
+  }
+})();
+</script>
+</body>
+</html>

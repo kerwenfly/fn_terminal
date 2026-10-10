@@ -1,0 +1,170 @@
+[
+ {
+  "send": "(start)",
+  "out_b64": "G1s/MjAwNGhyb290QG5hczp+IyA=",
+  "out_text": "\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!win 80 24",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send stty -echo 2\u003e/dev/null; history -d $((HISTCMD-1)) 2\u003e/dev/null",
+  "out_b64": "c3R0eSAtZWNobyAyPi9kZXYvbnVsbDsgaGlzdG9yeSAtZCAkKChISVNUQ01ELTEpKSAyPi9kZXYvbnVsbA==",
+  "out_text": "stty -echo 2\u003e/dev/null; history -d $((HISTCMD-1)) 2\u003e/dev/null",
+  "out_hex": "73 74 74 79 20 2d 65 63 68 6f 20 32 3e 2f 64 65 76 2f 6e 75 6c 6c 3b 20 68 69 73 74 6f 72 79 20 2d 64 20 24 28 28 48 49 53 54 43 4d 44 2d 31 29 29 20 32 3e 2f 64 65 76 2f 6e 75 6c 6c",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "DQobWz8yMDA0bA0bWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "\\r\\n\\e[?2004l\\r\\e[?2004hroot@nas:~# ",
+  "out_hex": "0d 0a 1b 5b 3f 32 30 30 34 6c 0d 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send stty -echo 2\u003e/dev/null; history -d $((HISTCMD-1)) 2\u003e/dev/null",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQobWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "\\e[?2004l\\r\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send bind -x '\"\\C-x\\C-r\": printf \"\\033]777;%s;%s\\007\" \"$READLINE_LINE\" \"$READLINE_POINT\"';history -d $((HISTCMD-1)) 2\u003e/dev/null",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQobWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "\\e[?2004l\\r\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3Nzs7MAc=",
+  "out_text": "\\r\\e[K\\r\\e]777;;0\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 3b 30 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send echo hi",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQpoaQ0KG1s/MjAwNGhyb290QG5hczp+IyA=",
+  "out_text": "\\e[?2004l\\r\\r\\nhi\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 68 69 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send cd /tm",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \t",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3NztjZCAvdG1wLzs4Bw==",
+  "out_text": "\\r\\e[K\\r\\e]777;cd /tmp/;8\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 63 64 20 2f 74 6d 70 2f 3b 38 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQobWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "\\e[?2004l\\r\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send echo zz",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQp6DQobWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "\\e[?2004l\\r\\r\\nz\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 7a 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send echo ok",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[D",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[D",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[C",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0003",
+  "out_b64": "XkMbWz8yMDA0bA0NChtbPzIwMDRoG1s/MjAwNGwNDQoNChtbPzIwMDRocm9vdEBuYXM6fiMg",
+  "out_text": "^C\\e[?2004l\\r\\r\\n\\e[?2004h\\e[?2004l\\r\\r\\n\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "5e 43 1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 1b 5b 3f 32 30 30 34 6c 0d 0d 0a 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ }
+]

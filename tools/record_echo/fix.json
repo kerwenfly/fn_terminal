@@ -1,0 +1,639 @@
+[
+ {
+  "send": "(start)",
+  "out_b64": "G1s/MjAwNGhyb290QG5hczp+IyA=",
+  "out_text": "\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send bind -x '\"\\C-x\\C-r\": printf \"\\033]777;%s;%s\\007\" \"$READLINE_LINE\" \"$READLINE_POINT\"';history -d $((HISTCMD-1)) 2\u003e/dev/null\r\u0018\u0012",
+  "out_b64": "G1s/MjAwNGwNDQobWz8yMDA0aHJvb3RAbmFzOn4jIA0bW0sNG103Nzc7OzAH",
+  "out_text": "\\e[?2004l\\r\\r\\n\\e[?2004hroot@nas:~# \\r\\e[K\\r\\e]777;;0\\a",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20 0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 3b 30 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send c",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send h",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send o",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send h",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send i",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQpoaQ0KG1s/MjAwNGhyb290QG5hczp+IyA=",
+  "out_text": "\\e[?2004l\\r\\r\\nhi\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 68 69 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send c",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send h",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send o",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send o",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send n",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQpvbmUNChtbPzIwMDRocm9vdEBuYXM6fiMg",
+  "out_text": "\\e[?2004l\\r\\r\\none\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 6f 6e 65 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send a",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send b",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send c",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[D",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send X",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[3~",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[H",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send Z",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[F",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send 9",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0015",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send c",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send d",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send /",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send t",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send m",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \t\u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3NztjZCAvdG1wLzs4Bw==",
+  "out_text": "\\r\\e[K\\r\\e]777;cd /tmp/;8\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 63 64 20 2f 74 6d 70 2f 3b 38 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0015",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[A\u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3NztlY2hvIG9uZTs4Bw==",
+  "out_text": "\\r\\e[K\\r\\e]777;echo one;8\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 65 63 68 6f 20 6f 6e 65 3b 38 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[A\u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3NztlY2hvIGhpOzcH",
+  "out_text": "\\r\\e[K\\r\\e]777;echo hi;7\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 65 63 68 6f 20 68 69 3b 37 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u001b[B\u0018\u0012",
+  "out_b64": "DRtbSw0bXTc3NztlY2hvIG9uZTs4Bw==",
+  "out_text": "\\r\\e[K\\r\\e]777;echo one;8\\a",
+  "out_hex": "0d 1b 5b 4b 0d 1b 5d 37 37 37 3b 65 63 68 6f 20 6f 6e 65 3b 38 07",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0015",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send a",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send b",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0003",
+  "out_b64": "XkMbWz8yMDA0bA0NChtbPzIwMDRoG1s/MjAwNGwNDQoNChtbPzIwMDRocm9vdEBuYXM6fiMg",
+  "out_text": "^C\\e[?2004l\\r\\r\\n\\e[?2004h\\e[?2004l\\r\\r\\n\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "5e 43 1b 5b 3f 32 30 30 34 6c 0d 0d 0a 1b 5b 3f 32 30 30 34 68 1b 5b 3f 32 30 30 34 6c 0d 0d 0a 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send 中",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send 文",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0015",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \f",
+  "out_b64": "G1tIG1sySg==",
+  "out_text": "\\e[H\\e[2J",
+  "out_hex": "1b 5b 48 1b 5b 32 4a",
+  "echo_on": false
+ },
+ {
+  "send": "!send r",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send a",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send d",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send -",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send p",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send '",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send N",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send a",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send m",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send :",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send '",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send n",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send ;",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send e",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send c",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send h",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send o",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \"",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send h",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send i",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send  ",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send $",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send n",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \"",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "G1s/MjAwNGwNDQpOYW1lOiA=",
+  "out_text": "\\e[?2004l\\r\\r\\nName: ",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 4e 61 6d 65 3a 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send b",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send o",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send b",
+  "out_b64": "",
+  "out_text": "",
+  "out_hex": "",
+  "echo_on": false
+ },
+ {
+  "send": "!send \r",
+  "out_b64": "aGkgYm9iDQobWz8yMDA0aHJvb3RAbmFzOn4jIA==",
+  "out_text": "hi bob\\r\\n\\e[?2004hroot@nas:~# ",
+  "out_hex": "68 69 20 62 6f 62 0d 0a 1b 5b 3f 32 30 30 34 68 72 6f 6f 74 40 6e 61 73 3a 7e 23 20",
+  "echo_on": false
+ },
+ {
+  "send": "!send \u0004",
+  "out_b64": "G1s/MjAwNGwNDQpleGl0DQo=",
+  "out_text": "\\e[?2004l\\r\\r\\nexit\\r\\n",
+  "out_hex": "1b 5b 3f 32 30 30 34 6c 0d 0d 0a 65 78 69 74 0d 0a",
+  "echo_on": false
+ }
+]

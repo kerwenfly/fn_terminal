@@ -40,20 +40,35 @@ log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}" 2>/dev/null
 }
 
+# PID 归属校验（防 PID 复用）：pid 文件里的号码可能已被内核复用给别的进程，
+# 对它 kill -<pgid> 会误杀无辜进程组。发信号前必须确认 cmdline 仍是 terminal-pty。
+# /proc 不可读时退回旧行为（进程多半已死，kill 无害）。
+is_pty_pid() {
+    if [ -r "/proc/$1/cmdline" ]; then
+        case "$(tr -d '\0' < "/proc/$1/cmdline" 2>/dev/null)" in
+            *terminal-pty*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    return 0
+}
+
 # 销毁目录下所有会话（按 pid 文件杀进程组）
 kill_all_sessions() {
     [ -d "${SESS_DIR}" ] || return 0
     for f in "${SESS_DIR}"/*/pid; do
         [ -f "${f}" ] || continue
         pid="$(tr -d '[:space:]' < "${f}" 2>/dev/null)"
-        [ -n "${pid}" ] || continue
+        case "${pid}" in ''|*[!0-9]*) continue ;; esac
+        is_pty_pid "${pid}" || continue
         kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
     done
     sleep 1
     for f in "${SESS_DIR}"/*/pid; do
         [ -f "${f}" ] || continue
         pid="$(tr -d '[:space:]' < "${f}" 2>/dev/null)"
-        [ -n "${pid}" ] || continue
+        case "${pid}" in ''|*[!0-9]*) continue ;; esac
+        is_pty_pid "${pid}" || continue
         kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
     done
     rm -rf "${SESS_DIR}" 2>/dev/null
@@ -77,6 +92,13 @@ start_process() {
         [ -f "${d}/pid" ] && pid="$(tr -d '[:space:]' < "${d}/pid" 2>/dev/null)"
 
         if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+            rm -rf "${d}" 2>/dev/null
+            continue
+        fi
+
+        # PID 活着但不是 terminal-pty（复用给了别的进程）——
+        # 只清目录，绝不能发信号
+        if ! is_pty_pid "${pid}"; then
             rm -rf "${d}" 2>/dev/null
             continue
         fi
@@ -107,7 +129,9 @@ start_process() {
     for f in "${APP_DIR}/bin/"*; do
         [ -f "${f}" ] && chmod +x "${f}" 2>/dev/null
     done
-    chmod +x "${APP_DIR}/cmd/"* 2>/dev/null
+    for f in "${APP_DIR}/cmd/"*; do
+        [ -f "${f}" ] && chmod +x "${f}" 2>/dev/null
+    done
 
     # PTY 组件缺失时补挑一次（升级 / 手工拷贝场景）
     if [ ! -x "${APP_DIR}/bin/terminal-pty" ] && [ -d "${APP_DIR}/bin" ]; then

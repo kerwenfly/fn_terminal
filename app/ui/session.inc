@@ -22,6 +22,7 @@
 # 会话目录结构（$VARDIR/sessions/<sid>/）
 #   pid         包装进程 PID（terminal-pty），用于会话存活判定
 #   in.pipe     FIFO，向 shell 写入命令 / 按键
+#   ctl.pipe    FIFO，控制通道（"cols rows\n" 改尺寸、"echo 0|1\n" 开关回显）
 #   out.log     PTY 累积输出（只增不改）
 #   bashrc      会话专用 shell 启动文件
 #   cwd         shell 每轮结束回写的当前目录（供状态栏展示）
@@ -152,13 +153,40 @@ valid_sid() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# PID 归属校验（防 PID 复用）
+#
+#   kill -0 只能证明「有一个进程占着这个 PID」，不能证明它就是我们的
+#   terminal-pty。会话死后 PID 被内核回收复用的话：
+#     · sess_alive 误判存活 -> 孤儿会话目录长期不回收；
+#     · sess_close 对它 kill -<pgid> -> **误杀一个无关进程组**。
+#   因此凡是要依据 pid 文件做生死判断/发信号的地方，都要再核对
+#   /proc/<pid>/cmdline 里确实包含 terminal-pty。
+#   /proc 不可读（受限环境/老内核）时退回旧行为，不影响可用性。
+# ---------------------------------------------------------------------------
+_sess_pid_is_pty() {
+    local pid="$1" cmd
+    [ -n "${pid}" ] || return 1
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        cmd="$(tr -d '\0' < "/proc/${pid}/cmdline" 2>/dev/null)"
+        case "${cmd}" in
+            *terminal-pty*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    return 0
+}
+
 sess_alive() {
     local sid="$1" dir pid
     dir="$(sess_dir "$sid")"
     [ -f "${dir}/pid" ] || return 1
     pid="$(tr -d '[:space:]' < "${dir}/pid" 2>/dev/null)"
-    [ -n "${pid}" ] || return 1
+    case "${pid}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
     kill -0 "${pid}" 2>/dev/null || return 1
+    _sess_pid_is_pty "${pid}" || return 1
     return 0
 }
 
@@ -221,6 +249,7 @@ PROMPT_COMMAND='__sess_sync'
 BASHRC
 
     mkfifo "${dir}/in.pipe" 2>/dev/null
+    mkfifo "${dir}/ctl.pipe" 2>/dev/null
     : > "${dir}/out.log"
     : > "${dir}/cwd"
     : > "${dir}/rc"
@@ -301,9 +330,22 @@ BASHRC
 
 # ---------------------------------------------------------------------------
 # 调整 PTY 窗口尺寸
-#   包装进程持有 master，理论上可以直接 ioctl(TIOCSWINSZ)；但为了与「会话内
-#   实际终端」保持绝对一致，这里统一改用「在会话内部执行 stty」：
-#   命令跑在真实 pts 上，写进 FIFO 即可生效，同时触发 shell 重绘提示符。
+#
+#   走**独立的控制 FIFO**（ctl.pipe），由包装进程 ioctl(TIOCSWINSZ) 生效。
+#
+#   为什么不能用「在会话里执行 stty」这种老办法（v1.2.5 及以前就是这么干的）：
+#     把 `stty cols X rows Y` 拼成命令写进 in.pipe，等于**替用户敲了一行命令**：
+#       · 它会被原样回显到屏幕上 —— 用户会看到一串自己从没输入过的 stty；
+#       · 中途 resize 多次就会出现多行、列数还不一样的重复内容；
+#       · 它还会进入 shell 历史，按 ↑ 就能翻出来；
+#       · 若此刻前台跑着别的程序（vim / top / 交互式脚本），这些字符会被
+#         直接喂给那个程序，等于误操作。
+#
+#   ioctl 方案没有任何副作用，而且同样是「真实终端」语义：
+#   内核在尺寸变化后会给 PTY 前台进程组发 SIGWINCH，shell 自动重绘提示符，
+#   全屏程序也照常自适应 —— 这正是当初想用 stty 达到的效果。
+#
+#   注意：ctl.pipe 是**增量指令**通道，只写 "cols rows\n"，不碰按键流。
 # ---------------------------------------------------------------------------
 sess_resize() {
     local sid="$1" cols="$2" rows="$3"
@@ -322,16 +364,46 @@ sess_resize() {
     printf '%s' "${cols}" > "${dir}/cols"
     printf '%s' "${rows}" > "${dir}/rows"
 
-    # 在会话内改尺寸（stty 作用于当前 pts）。
-    # login 模式下还没登录时没有 shell，stty 会失败 —— 无害，登录后自然生效。
-    # 用 timeout 保护，避免读端异常时挂住 CGI。
-    #
-    # 注意 printf 的用法：格式串里的 %s 必须紧跟对应的参数，
-    # 且 sh -c 的 $0 是占位符、$1/$2/$3 才是真正参数。
-    timeout 3 sh -c \
-        'printf "stty cols %s rows %s 2>/dev/null\r" "$1" "$2" > "$3"' \
-        _ "${cols}" "${rows}" "${dir}/in.pipe" 2>/dev/null
+    _sess_ctl_send "${dir}" "${cols} ${rows}"
+}
+
+# ---------------------------------------------------------------------------
+# 往控制通道写一条指令
+#
+#   与 sess_exec 同样的技巧：O_RDWR 打开 FIFO 永不阻塞，
+#   因此不需要 timeout 兜底，也不会因为读端异常而挂住 CGI。
+# ---------------------------------------------------------------------------
+_sess_ctl_send() {
+    local dir="$1" text="$2"
+    [ -p "${dir}/ctl.pipe" ] || return 1
+    if ! exec 9<>"${dir}/ctl.pipe" 2>/dev/null; then
+        return 1
+    fi
+    printf '%s\n' "${text}" >&9 2>/dev/null
+    exec 9>&-
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# 开关 tty 回显
+#
+#   前端的「本地即时回显」要求 shell 不要也回显一遍，否则同一串字符会被画两次。
+#   包装进程在会话创建时已经把 ECHO 位清掉了（见 main.go 的 setEcho），
+#   但有两类程序会把它重新打开：
+#     · login / su 这类登录程序，认证前后会按自己的默认值重置 termios；
+#     · 少数自己管理终端的程序。
+#   所以前端在识别到新的提示符之后会再压一次 —— 走控制通道，屏幕与历史都干净。
+# ---------------------------------------------------------------------------
+sess_set_echo() {
+    local sid="$1" on="$2"
+    local dir
+    dir="$(sess_dir "$sid")"
+    case "${on}" in
+        0|1) ;;
+        *) return 1 ;;
+    esac
+    sess_alive "$sid" || return 1
+    _sess_ctl_send "${dir}" "echo ${on}"
 }
 
 # ---------------------------------------------------------------------------
@@ -339,7 +411,7 @@ sess_resize() {
 #
 # 参数：
 #   $1 sid
-#   $2 offset   当前前端已读到的字节偏移
+#   $2 offset   保留参数（历史签名，未使用）
 #   $3 data_b64 按键流的 base64 编码（不是明文！）
 #
 # 为什么整条链路都用 base64：
@@ -347,26 +419,123 @@ sess_resize() {
 #   若中途 decode 成明文再传递，Ctrl 组合键 / 二进制输入会被破坏。
 #   因此约定「data 一路保持 base64，只在写入 FIFO 的那一刻解码一次」。
 #
+# 【为什么这里只写不读】
+#   exec 是**每次按键都要走**的路径，它的耗时直接等于手感。
+#   实测（WSL，x86_64）一次 exec 的构成大致是：
+#       加载 session.inc        约 11 ms
+#       sess_gc                 约 19 ms
+#       sess_alive              约  9 ms
+#       写 FIFO（3 个进程）      约 60 ms
+#       sess_read（6 个进程）    约 37 ms
+#   其中 sess_read 的部分是纯浪费：
+#     · 前端本来就会丢掉 exec 返回的 data（输出只认 read 那一条通道）；
+#     · cwd / rc / user 这些状态栏字段，随后的长轮询 read 一样会带回来。
+#   去掉它以后单次按键的后端开销直接砍掉四分之一以上。
+#
 # 注意：窗口尺寸调整是独立的 resize 动作，不经过这里。
 # ---------------------------------------------------------------------------
 sess_exec() {
-    local sid="$1" offset="$2" data_b64="$3"
+    local sid="$1" data_b64="$3"
     local dir
     dir="$(sess_dir "$sid")"
+    [ -d "${dir}" ] || return 1
+    [ -p "${dir}/in.pipe" ] || return 1
     sess_alive "$sid" || return 1
 
+    # ------------------------------------------------------------------
     # 原样透传按键流：base64 -d 一次写入 FIFO。
-    #   1) 绝不自动补回车 —— xterm.js 逐键回调，补 \n 会「敲一个字就执行」；
-    #   2) FIFO 写端 open 会阻塞到读端出现，用 timeout 兜底防止 CGI 挂死。
-    if ! timeout 3 sh -c \
-        'printf "%s" "$1" | base64 -d > "$2"' _ "${data_b64}" "${dir}/in.pipe" 2>/dev/null; then
-        :   # 超时 / 写入失败：忽略本次输入，前端下一轮会通过 read 补齐
+    #
+    #   1) 绝不自动补回车 —— xterm.js 是逐键回调，补 \n 会「敲一个字就执行」；
+    #   2) 用 O_RDWR 打开 FIFO：对 FIFO 而言 O_RDWR **永远不会阻塞**，
+    #      不像 O_WRONLY 那样在没有读端时卡死在 open 上。于是既不需要
+    #      `timeout` 兜底、也少一个进程 —— 顺带把「组件已死导致 CGI 挂死」
+    #      这个隐患从根上去掉了。
+    #      自己不开读，数据仍然送到 terminal-pty 那个读端。
+    # ------------------------------------------------------------------
+    if ! exec 9<>"${dir}/in.pipe" 2>/dev/null; then
+        return 1
     fi
+    printf '%s' "${data_b64}" | base64 -d >&9 2>/dev/null
+    exec 9>&-
+    return 0
+}
 
-    # 给 shell 一点时间产出（前端会轮询补齐剩余输出）
-    sleep 0.3
+# ---------------------------------------------------------------------------
+# 取日志文件字节数
+#
+#   优先 stat（GNU/Linux 上是单次系统调用，不读文件内容）；
+#   退化到 wc -c（GNU wc 对**普通文件**会走 fstat+lseek 优化，同样不读内容）。
+#   去掉尾部管道 tr：用参数展开剥空格，在长轮询循环里每 50ms 跑一次，
+#   少一个进程就是少一份开销。
+# ---------------------------------------------------------------------------
+_sess_log_size() {
+    local f="$1" s
+    [ -f "${f}" ] || { printf '0'; return 0; }
 
+    s="$(stat -c %s "${f}" 2>/dev/null)"
+    if [ -z "${s}" ]; then
+        s="$(wc -c < "${f}" 2>/dev/null)"
+        s="${s//[[:space:]]/}"
+    fi
+    printf '%s' "${s:-0}"
+}
+
+# ---------------------------------------------------------------------------
+# 长轮询读取：最多等待 wait_ms 毫秒，一有新输出立刻返回
+#
+#	为什么需要它（「输入回显很慢」的另一半根因）：
+#	  纯轮询模型下前端只能按固定间隔来问，平均还要再等半格 ——
+#	  一次按键的回显被凭空拖到半秒以上。
+#	  改成「后端挂住等」以后：
+#	    · 前端不必密集轮询，请求数反而更少；
+#	    · 回显一落到 out.log，挂着的这次请求立刻返回，延时只剩一个网络单程。
+#
+#	实现细节：
+#	  · 先用 sess_read 试一次，命中就直接返回（绝大多数按键都走这条快速路径）；
+#	  · 之后循环只做一件廉价的事：比较 out.log 长度有没有变化；
+#	  · 会话进程死掉就提前返回，不会把 CGI 挂满整个超时；
+#	  · 等待期间顺手续租心跳 —— 挂着长轮询本身就证明页面还开着。
+# ---------------------------------------------------------------------------
+sess_read_wait() {
+    local sid="$1" offset="$2" wait_ms="$3"
+    local dir size0 size1 waited=0
+
+    dir="$(sess_dir "$sid")"
+    [ -d "${dir}" ] || return 1
+
+    # 快速路径：已经有新增输出，不必等
+    sess_read "${sid}" "${offset}" || return 1
+    [ -n "${_OUT_B64:-}" ] && return 0
+
+    case "${wait_ms}" in
+        ''|*[!0-9]*) wait_ms=0 ;;
+    esac
+    [ "${wait_ms}" -gt 5000 ] && wait_ms=5000
+    [ "${wait_ms}" -le 0 ] && return 0
+
+    size0="$(_sess_log_size "${dir}/out.log")"
+
+    while [ "${waited}" -lt "${wait_ms}" ]; do
+        sleep 0.05
+        waited=$((waited + 50))
+
+        size1="$(_sess_log_size "${dir}/out.log")"
+
+        if [ "${size1}" != "${size0}" ]; then
+            sess_read "${sid}" "${offset}"
+            return 0
+        fi
+
+        # 每 500ms 做两件低频的事：续租心跳 + 确认会话还活着
+        if [ $((waited % 500)) -lt 50 ]; then
+            sess_beat_file "${dir}"
+            sess_alive "${sid}" || break
+        fi
+    done
+
+    # 超时（或会话已结束）：返回当前状态，前端会立刻发起下一轮长轮询
     sess_read "${sid}" "${offset}"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -378,23 +547,46 @@ sess_read() {
     dir="$(sess_dir "$sid")"
     [ -d "${dir}" ] || return 1
 
-    size=0
-    [ -f "${dir}/out.log" ] && size="$(wc -c < "${dir}/out.log" 2>/dev/null | tr -d ' ')"
-    [ -z "${size}" ] && size=0
+    # 截断标志：本批次输出使用的是「截断后的新 offset 体系」。
+    # 置位时前端必须无条件把本地 offset 重置成响应里的值（见 terminal.cgi）。
+    _OUT_TRUNCATED=""
 
-    # offset 非法或超过文件长度（日志被截断过），从头重读
+    # 取长度：统一走 _sess_log_size（stat 单次系统调用），不再 wc|tr 双进程
+    size="$(_sess_log_size "${dir}/out.log")"
+
+    # offset 非法或超过文件长度（日志被截断过/并发截断），从头重读。
+    # 这种「被别人的截断波及」的情况同样必须带截断标志，否则前端照样拒绝。
     case "${offset}" in
         ''|*[!0-9]*) offset=0 ;;
     esac
-    [ "${offset}" -gt "${size}" ] && offset=0
+    if [ "${offset}" -gt "${size}" ]; then
+        offset=0
+        _OUT_TRUNCATED=1
+    fi
 
     # 日志超过上限时做一次尾部保留，并同步校正 offset
+    #   截断后 offset 体系整体归零，必须通过 _OUT_TRUNCATED 明确告诉前端
+    #   「这是截断后的新坐标」—— 否则前端的乱序防护（d.offset >= this.offset）
+    #   会把这批数据永久拒绝，表现为「输出超过 5MB 后终端再也不出字」。
+    #   flock 串行化多个并发 read 的截断，避免互相踩 out.tmp；
+    #   flock 不可用时退化为尽力而为（竞态窗口极小，最坏是重复截断一次）。
     if [ "${size}" -gt "${LOG_MAX_BYTES}" ]; then
         local keep=$((LOG_MAX_BYTES / 2))
-        tail -c "${keep}" "${dir}/out.log" > "${dir}/out.tmp" 2>/dev/null \
-            && mv "${dir}/out.tmp" "${dir}/out.log"
+        if command -v flock >/dev/null 2>&1; then
+            (
+                flock -x 9 2>/dev/null || exit 0
+                if [ "$(_sess_log_size "${dir}/out.log")" -gt "${LOG_MAX_BYTES}" ]; then
+                    tail -c "${keep}" "${dir}/out.log" > "${dir}/out.tmp" 2>/dev/null \
+                        && mv "${dir}/out.tmp" "${dir}/out.log"
+                fi
+            ) 9>>"${dir}/.trunc.lock" 2>/dev/null
+        else
+            tail -c "${keep}" "${dir}/out.log" > "${dir}/out.tmp" 2>/dev/null \
+                && mv "${dir}/out.tmp" "${dir}/out.log"
+        fi
         offset=0
-        size="${keep}"
+        size="$(_sess_log_size "${dir}/out.log")"
+        _OUT_TRUNCATED=1
     fi
 
     local chunk_bytes=$((size - offset))
@@ -434,6 +626,11 @@ sess_close() {
             ''|*[!0-9]*) pid="" ;;
         esac
         if [ -n "${pid}" ]; then
+            # PID 复用防护：只有确认这个 PID 还是 terminal-pty 才发信号。
+            # （进程已死时 /proc/<pid>/cmdline 读不到 -> _sess_pid_is_pty 放行，
+            #   后面的 kill 自然全部失败、无害；危险的是「PID 活着但换了主人」，
+            #   那种情况绝不能 kill -pgid，否则会误杀无辜进程组。）
+            if _sess_pid_is_pty "${pid}"; then
             # ------------------------------------------------------------------
             # 杀整个会话进程组，连同 shell 及其子进程。
             #
@@ -446,14 +643,15 @@ sess_close() {
             #   - 最后再确认一次，仍在就补第二发 KILL（对付极端慢的调度）。
             # 负号是「进程组」，保证 bash 里再 fork 出来的子进程一起走。
             # ------------------------------------------------------------------
-            kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
-            sleep 0.5
-            kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
-
-            # 收尾确认：极少数情况下 0.5s 内还没调度到，再补一发
-            if kill -0 "${pid}" 2>/dev/null; then
-                sleep 0.3
+                kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
+                sleep 0.5
                 kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
+
+                # 收尾确认：极少数情况下 0.5s 内还没调度到，再补一发
+                if kill -0 "${pid}" 2>/dev/null; then
+                    sleep 0.3
+                    kill -KILL -"${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null
+                fi
             fi
         fi
     fi

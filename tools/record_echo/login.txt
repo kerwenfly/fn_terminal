@@ -1,0 +1,27 @@
+# 登录模式录制规格（由 tools/gen_login_fixture.js 生成，勿手改）
+# !keep = 保留 tty 原生回显 —— 复现 /bin/login 之后的 tty 状态
+!keep
+!dir /root
+!win 80 24 0
+"" 1500
+"stty -echo 2>/dev/null; history -d $((HISTCMD-1)) 2>/dev/null" 400
+"\r" 700
+"stty -echo 2>/dev/null; history -d $((HISTCMD-1)) 2>/dev/null" 400
+"\r" 700
+"bind -x '\"\\C-x\\C-r\": printf \"\\033]777;%s;%s\\007\" \"$READLINE_LINE\" \"$READLINE_POINT\"';history -d $((HISTCMD-1)) 2>/dev/null" 400
+"\r" 250
+"\x18\x12" 800
+"echo hi" 300
+"\r" 700
+"cd /tm" 300
+"\t" 500
+"\x18\x12" 700
+"\r" 700
+"echo zz" 300
+"\x7f" 300
+"\r" 700
+"echo ok" 300
+"\x1b[D" 200
+"\x1b[D" 200
+"\x1b[C" 200
+"\x03" 700

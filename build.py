@@ -13,9 +13,9 @@
   - 显式双向搬运 PTY 数据，不依赖任何命令的隐式行为，最可靠。
 
 架构与 manifest.platform 的对应（飞牛官方约定）：
-    amd64  -> 平台 x86      -> 产物 terminal_1.2.4_x86.fpk
-    arm64  -> 平台 arm      -> 产物 terminal_1.2.4_arm.fpk
-    arm    -> 平台 arm      -> 产物 terminal_1.2.4_arm.fpk
+    amd64  -> 平台 x86      -> 产物 terminal_<version>_x86.fpk
+    arm64  -> 平台 arm      -> 产物 terminal_<version>_arm64.fpk
+    arm    -> 平台 arm      -> 产物 terminal_<version>_arm.fpk
   ⚠️ platform 是**单值**字段，一个 fpk 只能声明一种架构。
      因此双架构必须分别打包成两个 fpk，不能写成 all
      （写 all 会同时装到 x86 与 ARM，但包内只有一种二进制，另一端必然跑不起来）。
