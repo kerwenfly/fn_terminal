@@ -2,16 +2,17 @@
 #
 # 终端 CGI —— 所有终端操作的唯一入口
 #
-#   浏览器侧                        动作
-#   /cgi/ThirdParty/terminal/terminal.cgi/create        新建 PTY 会话
-#   /cgi/ThirdParty/terminal/terminal.cgi/exec          执行命令 / 送按键
-#   /cgi/ThirdParty/terminal/terminal.cgi/read          拉取新增输出（支持长轮询 wait）
-#   /cgi/ThirdParty/terminal/terminal.cgi/resize        调整窗口尺寸
-#   /cgi/ThirdParty/terminal/terminal.cgi/echo          开关 tty 回显（本地回显配套）
-#   /cgi/ThirdParty/terminal/terminal.cgi/keepalive     页面心跳（证明页面还开着）
-#   /cgi/ThirdParty/terminal/terminal.cgi/shutdown      页面关闭 -> 销毁其全部会话
-#   /cgi/ThirdParty/terminal/terminal.cgi/close         关闭并销毁单个会话
-#   /cgi/ThirdParty/terminal/terminal.cgi/info          会话状态（cwd / 退出码 / 存活）
+#   浏览器侧（动作经查询串传递；新版飞牛只允许直接执行 index.cgi，
+#   API 请求由 index.cgi exec 转发到这里，见 index.cgi 的分发逻辑）：
+#   /cgi/ThirdParty/terminal/index.cgi?action=create  新建 PTY 会话
+#   /cgi/ThirdParty/terminal/index.cgi?action=exec    执行命令 / 送按键
+#   /cgi/ThirdParty/terminal/index.cgi?action=read    拉取新增输出（支持长轮询 wait）
+#   /cgi/ThirdParty/terminal/index.cgi?action=resize  调整窗口尺寸
+#   /cgi/ThirdParty/terminal/index.cgi?action=echo    开关 tty 回显（本地回显配套）
+#   /cgi/ThirdParty/terminal/index.cgi?action=keepalive  页面心跳（证明页面还开着）
+#   /cgi/ThirdParty/terminal/index.cgi?action=shutdown   页面关闭 -> 销毁其全部会话
+#   /cgi/ThirdParty/terminal/index.cgi?action=close   关闭并销毁单个会话
+#   /cgi/ThirdParty/terminal/index.cgi?action=info    会话状态（cwd / 退出码 / 存活）
 #
 # 两条贯穿全链路的性能约定（与「输入手感」直接相关）：
 #
@@ -96,7 +97,17 @@ json_num() {
 }
 
 # ---------------------------------------------------------------------------
-# 解析 action：fnOS 把 /xxx.cgi/<action> 放进 PATH_INFO，REQUEST_URI 兜底
+# 解析 action。三个来源按序兜底：
+#   1) PATH_INFO（旧 fnOS：/xxx.cgi/<action>）
+#   2) REQUEST_URI 里的 terminal.cgi/<action>
+#   3) QUERY_STRING 的 ?action=<action>（**新 fnOS 的主通道**）
+#
+#   为什么需要第 3 种：飞牛升级后，网关不再把 /terminal.cgi/<action> 的子路径
+#   当 PATH_INFO 传给 CGI，而是按字面文件路径去找 "terminal.cgi/create"，
+#   找不到就返回自己的纯文本错误（"cgi executable not found" 之类）——
+#   前端 r.json() 解析失败，表现就是「Unexpected token 'c', "cgi execut"...」。
+#   查询串方式不依赖网关的 PATH_INFO 路由行为，新旧版本都稳定，
+#   前端自 v1.2.10 起固定走 ?action=。
 # ---------------------------------------------------------------------------
 ACTION=""
 if [ -n "${PATH_INFO}" ]; then
@@ -109,6 +120,18 @@ if [ -z "${ACTION}" ] && [ -n "${REQUEST_URI}" ]; then
     ACTION="${ACTION%%\?*}"
     ACTION="${ACTION%%/*}"
 fi
+if [ -z "${ACTION}" ] && [ -n "${QUERY_STRING}" ]; then
+    case "${QUERY_STRING}" in
+        *action=*)
+            ACTION="${QUERY_STRING#*action=}"
+            ACTION="${ACTION%%&*}"
+            ;;
+    esac
+fi
+# 只留合法字符（动作都是简单单词），防注入/乱码
+case "${ACTION}" in
+    ''|*[!A-Za-z0-9_]*) ACTION="" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 响应助手

@@ -1,13 +1,22 @@
 #!/bin/bash
 #
-# 静态文件服务 CGI —— 把请求路径映射到 target/www 目录
-#   浏览器侧: /cgi/ThirdParty/terminal/index.cgi/<path>
-#   实际文件: /var/apps/terminal/target/www/<path>
+# 应用统一入口 CGI：
+#   1) 静态文件服务 —— 把请求路径映射到 target/www 目录
+#        浏览器侧: /cgi/ThirdParty/terminal/index.cgi/<path>
+#        实际文件: /var/apps/terminal/target/www/<path>
+#   2) API 分发 —— 带 ?action=<name> 的请求转发给 terminal.cgi（v1.2.11）
 #
 # 说明：飞牛打开应用入口时的请求形如
 #   /cgi/ThirdParty/terminal/index.cgi/
 # 此时 REQUEST_URI 可能带或不带尾部的 `/`，也可能只给 PATH_INFO，
 # 三种情况都要落到 www/index.html。
+#
+# 【为什么 API 也要从这走】新版飞牛网关只允许直接执行 index.cgi，
+# 对 terminal.cgi 的请求会返回纯文本错误 "cgi executable must be index.cgi"
+# （前端表现为 r.json() 解析失败的 SyntaxError）。因此 API 请求统一打到
+# index.cgi?action=xxx，由这里 exec 转发给 terminal.cgi —— exec 原地替换
+# 进程，QUERY_STRING / 环境变量原样透传，terminal.cgi 的解析逻辑不用改。
+# 旧版飞牛直接访问 terminal.cgi 依然可用（向后兼容，未删除该入口）。
 #
 
 APP_NAME="terminal"
@@ -18,6 +27,26 @@ if [ -n "${TRIM_APPDEST}" ]; then
     APP_DIR="${TRIM_APPDEST}"
 fi
 BASE_PATH="${APP_DIR}/www"
+
+# ---------------------------------------------------------------------------
+# API 分发：?action=<合法动作名> -> 转发 terminal.cgi
+#   放在静态文件解析之前 —— 否则 "index.cgi?action=create" 会被当成
+#   「index.cgi 目录下的默认页」落到 www/index.html。
+#   动作名只允许 [A-Za-z0-9_]（与 terminal.cgi 侧的校验一致），
+#   其它形式的查询串一律不转发、继续走静态文件。
+# ---------------------------------------------------------------------------
+if [ -n "${QUERY_STRING}" ]; then
+    case "${QUERY_STRING}" in
+        action=*)
+            QS_ACTION="${QUERY_STRING#action=}"
+            QS_ACTION="${QS_ACTION%%&*}"
+            case "${QS_ACTION}" in
+                ''|*[!A-Za-z0-9_]*) ;;   # 非法动作名：不转发
+                *) exec "${APP_DIR}/ui/terminal.cgi" ;;
+            esac
+            ;;
+    esac
+fi
 
 # ---------------------------------------------------------------------------
 # 解析请求路径

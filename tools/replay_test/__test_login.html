@@ -81,7 +81,14 @@
     return btoa(bin);
   }
   function resp(o) {
-    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(o); } });
+    // text() 也要有：v1.2.10 起 api() 先 r.text() 再 JSON.parse
+    //（为了把网关层的纯文本错误原样带出来），stub 必须两个都给。
+    var body = JSON.stringify(o);
+    return Promise.resolve({
+      ok: true, status: 200,
+      text: function () { return Promise.resolve(body); },
+      json: function () { return Promise.resolve(o); }
+    });
   }
   /* 流式匹配：夹具的一条可能被**好几个**请求吃完（逐字发送），
      一个请求也可能吃掉连续好几条（在途合并）。按字符流推进，
@@ -104,7 +111,10 @@
   }
 
   window.fetch = function (url, opt) {
-    var action = String(url).split('/').pop();
+    // action 优先从查询串取（v1.2.10 起 URL 形如 terminal.cgi?action=exec），
+    // 兼容旧的路径尾段形式
+    var us = String(url), am = us.match(/[?&]action=([A-Za-z0-9_]+)/);
+    var action = am ? am[1] : us.split('/').pop().split('?')[0];
     var body = {};
     try { body = opt && opt.body ? JSON.parse(opt.body) : {}; } catch (e) {}
 
@@ -140,10 +150,14 @@
     while (pendingReads.length && queue.length) {
       var b64 = queue.shift();
       var res = pendingReads.shift();
-      res({ ok: true, status: 200, json: function () {
-        return Promise.resolve({ ok: true, sid: 's1', offset: 0, alive: true,
-                                 cwd: '/', rc: '0', user: 'root', data: b64 });
-      } });
+      // 响应对象必须同时带 text() 和 json()：v1.2.10 起 api() 先 r.text() 再
+      // JSON.parse（把网关纯文本错误原样带出来），缺 text() 会整条 read 链断掉
+      var payload = { ok: true, sid: 's1', offset: 0, alive: true,
+                      cwd: '/', rc: '0', user: 'root', data: b64 };
+      var bodyText = JSON.stringify(payload);
+      res({ ok: true, status: 200,
+            text: function () { return Promise.resolve(bodyText); },
+            json: function () { return Promise.resolve(payload); } });
     }
   }
   window.__push = function (text) {

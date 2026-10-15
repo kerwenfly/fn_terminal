@@ -19,7 +19,11 @@
 (function () {
   'use strict';
 
-  var API = '/cgi/ThirdParty/terminal/terminal.cgi';
+  /* API 基址必须是 index.cgi：新版飞牛网关只允许直接执行 index.cgi，
+     对 terminal.cgi 的请求返回纯文本 "cgi executable must be index.cgi"。
+     API 请求带 ?action= 打到 index.cgi，由它 exec 转发给 terminal.cgi
+     （静态文件与 API 共用这一个入口，后端见 app/ui/index.cgi 的分发逻辑）。 */
+  var API = '/cgi/ThirdParty/terminal/index.cgi';
 
   /* 读取（长轮询）
        一次 read 请求让后端最多挂住 READ_WAIT_MS 毫秒，一有新输出立刻返回；
@@ -392,6 +396,14 @@
     return (i + 2 <= limit) ? i + 2 : i;
   }
 
+  /* 动作统一走查询串（?action=xxx），不依赖网关把 /terminal.cgi/<action>
+     的子路径解析成 PATH_INFO —— 飞牛升级后这条路由变了（网关按字面文件路径
+     找 "terminal.cgi/create"，返回纯文本错误），查询串在新旧版本都稳定。
+     后端 terminal.cgi 三种来源都认（PATH_INFO / REQUEST_URI / QUERY_STRING）。 */
+  function actionUrl(action) {
+    return API + '?action=' + encodeURIComponent(action);
+  }
+
   function api(action, payload) {
     var opt = { method: 'GET', headers: {} };
     if (payload) {
@@ -399,9 +411,21 @@
       opt.headers['Content-Type'] = 'application/json';
       opt.body = JSON.stringify(payload);
     }
-    return fetch(API + '/' + action, opt).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+    return fetch(actionUrl(action), opt).then(function (r) {
+      // 先按文本收，再手动 JSON.parse：
+      //   网关层报错（如 "cgi executable not found"）是纯文本，直接 r.json()
+      //   只会得到一句没头没尾的 SyntaxError；这里把服务端原文带出来，
+      //   出问题时一眼能看到网关到底回了什么。
+      return r.text().then(function (t) {
+        if (!r.ok) {
+          throw new Error('HTTP ' + r.status + (t ? '：' + String(t).slice(0, 160) : ''));
+        }
+        try {
+          return JSON.parse(t);
+        } catch (e) {
+          throw new Error('服务端返回了非 JSON 响应：' + String(t || '').slice(0, 160));
+        }
+      });
     });
   }
 
@@ -414,7 +438,7 @@
      的心跳超时兜底，不会漏杀）。 */
   function apiBeacon(action, payload) {
     try {
-      var url = API + '/' + action;
+      var url = actionUrl(action);
       var body = JSON.stringify(payload || {});
       if (navigator.sendBeacon) {
         return navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));

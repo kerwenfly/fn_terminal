@@ -1,5 +1,5 @@
 appname               = terminal
-version               = 1.2.9
+version               = 1.2.11
 display_name          = 终端
 desc                  = 网页终端，支持账号密码登录，在浏览器中直接执行 Shell 命令；输入行由前端本地编辑、零延迟零重复，登录模式自动协商静默回显，进程随页面开关，关闭网页即回收
 platform              = arm
